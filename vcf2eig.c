@@ -33,7 +33,8 @@ typedef struct {
 	int ignore_singleton;
 	int ignore_uninformative;
 	int num_autosomes;
-	int filter;
+	int filter_pass;
+	char *filter_str;
 	char *regions_fn;
 	char *regions;
 	char *oprefix;
@@ -181,7 +182,9 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 			hdr = bcf_sr_get_header(sr, i);
 			rec = bcf_sr_get_line(sr, i);
 
-			if (rec == NULL || (opt->filter && !bcf_has_filter(hdr, rec, ".")) || rec->n_allele > 2) {
+			if (rec == NULL || rec->n_allele > 2
+					|| (opt->filter_pass && !bcf_has_filter(hdr, rec, "."))
+					|| (opt->filter_str && bcf_has_filter(hdr, rec, opt->filter_str))) {
 				// set missing
 				for (j=0; j<bcf_hdr_nsamples(hdr); j++)
 					gt[x++] = 9;
@@ -335,6 +338,7 @@ usage(char *argv0)
 	fprintf(stderr, "   -s               Output singleton sites [no]\n");
 	fprintf(stderr, "   -u               Output uninformative sites (all alleles missing) [no]\n");
 	fprintf(stderr, "   -f               Treat calls not PASSing the FILTER as missing [no]\n");
+	fprintf(stderr, "   -F STR           Ignore sites with STR in the FILTER column []\n");
 	fprintf(stderr, "   -a INT           Number of autosomes [29]\n");
 	fprintf(stderr, "   -o STR           Output file prefix [out]\n");
 	exit(1);
@@ -346,7 +350,8 @@ main(int argc, char **argv)
 	opt_t opt;
 	int c;
 
-	opt.filter = 0;
+	opt.filter_str = NULL;
+	opt.filter_pass = 0;
 	opt.regions_fn = NULL;
 	opt.regions = NULL;
 	opt.ignore_transitions = 0;
@@ -356,7 +361,7 @@ main(int argc, char **argv)
 	opt.num_autosomes = 29;
 	opt.oprefix = "out";
 
-	while ((c = getopt(argc, argv, "a:r:R:o:tmsuf")) != -1) {
+	while ((c = getopt(argc, argv, "a:r:R:o:F:tmsuf")) != -1) {
 		switch (c) {
 			case 't':
 				opt.ignore_transitions = 1;
@@ -387,7 +392,10 @@ main(int argc, char **argv)
 				}
 				break;
 			case 'f':
-				opt.filter = 1;
+				opt.filter_pass = 1;
+				break;
+			case 'F':
+				opt.filter_str = optarg;
 				break;
 			default:
 				usage(argv[0]);
