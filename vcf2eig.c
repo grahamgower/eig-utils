@@ -183,13 +183,15 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 			rec = bcf_sr_get_line(sr, i);
 
 			if (rec == NULL || rec->n_allele > 2
-					|| (opt->filter_pass && !bcf_has_filter(hdr, rec, "."))
-					|| (opt->filter_str && bcf_has_filter(hdr, rec, opt->filter_str))) {
+					|| (opt->filter_pass && !bcf_has_filter(hdr, rec, "."))) {
 				// set missing
 				for (j=0; j<bcf_hdr_nsamples(hdr); j++)
 					gt[x++] = 9;
 				continue;
 			}
+
+			if (opt->filter_str && bcf_has_filter(hdr, rec, opt->filter_str))
+				break;
 
 			//printf("[%s:%d, %d] nr=%d, qual=%lf, n_allele=%d\n", bcf_seqname(hdr, rec), rec->pos+1, i, nr, rec->qual, rec->n_allele);
 
@@ -337,8 +339,8 @@ usage(char *argv0)
 	fprintf(stderr, "   -m               Output monomorphic sites [no]\n");
 	fprintf(stderr, "   -s               Output singleton sites [no]\n");
 	fprintf(stderr, "   -u               Output uninformative sites (all alleles missing) [no]\n");
-	fprintf(stderr, "   -f               Treat calls not PASSing the FILTER as missing [no]\n");
-	fprintf(stderr, "   -F STR           Ignore sites with STR in the FILTER column []\n");
+	//fprintf(stderr, "   -f               Treat calls not PASSing the FILTER as missing [no]\n"); // Don't use for QUAL filtering, it biases low coverage samples towards the reference
+	fprintf(stderr, "   -F STR           Ignore sites with STR in any file's FILTER column [SnpGap]\n");
 	fprintf(stderr, "   -a INT           Number of autosomes [29]\n");
 	fprintf(stderr, "   -o STR           Output file prefix [out]\n");
 	exit(1);
@@ -350,7 +352,7 @@ main(int argc, char **argv)
 	opt_t opt;
 	int c;
 
-	opt.filter_str = NULL;
+	opt.filter_str = "SnpGap";
 	opt.filter_pass = 0;
 	opt.regions_fn = NULL;
 	opt.regions = NULL;
