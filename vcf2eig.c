@@ -190,7 +190,7 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 				continue;
 			}
 
-			if (opt->filter_str && bcf_has_filter(hdr, rec, opt->filter_str))
+			if (opt->filter_str && bcf_has_filter(hdr, rec, opt->filter_str) > 0)
 				break;
 
 			//printf("[%s:%d, %d] nr=%d, qual=%lf, n_allele=%d\n", bcf_seqname(hdr, rec), rec->pos+1, i, nr, rec->qual, rec->n_allele);
@@ -210,6 +210,7 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 
 			for (j=0; j<bcf_hdr_nsamples(hdr); j++) {
 				if (rec->n_allele == 1) {
+					// we have variant type VCF_REF
 					if (dpr_arr[j] == 0)
 						// no reads covering locus
 						gt[x++] = 9;
@@ -286,11 +287,11 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 			if (opt->ignore_uninformative && mono_ref == 0)
 				continue;
 
-			// skip monomorphic sites, where all samples share an allele
+			// skip monomorphic sites (all samples share an allele)
 			if (opt->ignore_monomorphic && (gt_sum == mono_ref || gt_sum == 0))
 				continue;
 
-			// skip singleton sites, where all samples but one share an allele
+			// skip singleton sites (all samples but one share an allele)
 			if (opt->ignore_singleton && (gt_sum == mono_ref-2 || gt_sum == 2))
 				continue;
 		}
@@ -340,7 +341,7 @@ usage(char *argv0)
 	fprintf(stderr, "   -s               Output singleton sites [no]\n");
 	fprintf(stderr, "   -u               Output uninformative sites (all alleles missing) [no]\n");
 	//fprintf(stderr, "   -f               Treat calls not PASSing the FILTER as missing [no]\n"); // Don't use for QUAL filtering, it biases low coverage samples towards the reference
-	fprintf(stderr, "   -F STR           Ignore sites with STR in any file's FILTER column [SnpGap]\n");
+	fprintf(stderr, "   -F STR           Ignore sites with STR in any file's FILTER column []\n");
 	fprintf(stderr, "   -a INT           Number of autosomes [29]\n");
 	fprintf(stderr, "   -o STR           Output file prefix [out]\n");
 	exit(1);
@@ -352,7 +353,7 @@ main(int argc, char **argv)
 	opt_t opt;
 	int c;
 
-	opt.filter_str = "SnpGap";
+	opt.filter_str = NULL;
 	opt.filter_pass = 0;
 	opt.regions_fn = NULL;
 	opt.regions = NULL;
