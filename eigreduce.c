@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Graham Gower <graham.gower@gmail.com>
+ * Copyright (c) 2016,2017 Graham Gower <graham.gower@gmail.com>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -20,13 +20,88 @@
 #include <errno.h>
 #include <stdint.h>
 
+#include "kbtree.h"
+
+typedef struct {
+	uint64_t left; // (chrom_id << 32) | left_pos
+	uint32_t right;
+} interval_t;
+
+#define left_cmp(a, b) (((b).left < (a).left) - ((a).left < (b).left))
+KBTREE_INIT(bed, interval_t, left_cmp);
+
+// skip to next column
+#define next(x) \
+		while (*x != ' ' && *x != '\t') x++; \
+		while (*x == ' ' || *x == '\t') x++;
+
 typedef struct {
 	int ignore_monomorphic;
 	int ignore_singleton;
 	char *geno_fn;
 	char *snp_fn;
+	char *regions_fn;
 	char *oprefix;
 } opt_t;
+
+/*
+ * Parse bed intervals and place into a b-tree.
+ * This assumes non-overlapping intervals.
+ */
+kbtree_t(bed) *
+parse_bed(char *fn)
+{
+	kbtree_t(bed) *bt;
+	FILE *fp;
+	char *p;
+	char *buf = NULL;
+	size_t buflen = 0;
+	ssize_t nbytes;
+
+	uint32_t chrom, from, to;
+
+	fp = fopen(fn, "r");
+	if (fp == NULL) {
+		fprintf(stderr, "fopen: %s: %s\n", fn, strerror(errno));
+		bt = NULL;
+		goto err0;
+	}
+
+	bt = kb_init(bed, KB_DEFAULT_SIZE);
+
+	for (;;) {
+		if ((nbytes = getline(&buf, &buflen, fp)) == -1) {
+			if (errno) {
+				fprintf(stderr, "getline: %s: %s\n",
+						fn, strerror(errno));
+				kb_destroy(bed, bt);
+				bt = NULL;
+				goto err1;
+			}
+			break;
+		}
+
+		if (buf[nbytes-1] == '\n')
+			buf[nbytes-1] = 0;
+
+		p = buf;
+
+		// columns are: chrom from to ...
+		chrom = atoi(p);
+		next(p);
+		from = atoi(p);
+		next(p);
+		to = atoi(p);
+
+		interval_t in = {(uint64_t)chrom<<32 | from, to};
+		kb_putp(bed, bt, &in);
+	}
+
+err1:
+	fclose(fp);
+err0:
+	return bt;
+}
 
 int
 parse_eig(opt_t *opt)
@@ -40,6 +115,7 @@ parse_eig(opt_t *opt)
 	ssize_t gnbytes, snbytes;
 	int64_t n_sites;
 	char tmpfn[4096];
+	kbtree_t(bed) *bt = NULL;
 
 	geno_fp = fopen(opt->geno_fn, "r");
 	if (geno_fp == NULL) {
@@ -71,6 +147,14 @@ parse_eig(opt_t *opt)
 		goto err3;
 	}
 
+	if (opt->regions_fn) {
+		bt = parse_bed(opt->regions_fn);
+		if (bt == NULL) {
+			ret = -5;
+			goto err4;
+		}
+	}
+
 	n_sites = 0;
 	gbuf = sbuf = NULL;
 	gbuflen = sbuflen = 0;
@@ -85,20 +169,17 @@ parse_eig(opt_t *opt)
 		char alt;
 		char *c = sbuf;
 		int n_gts = gnbytes;
+		int32_t chrom, pos;
 		while (gbuf[n_gts-1] == '\n' || gbuf[n_gts-1] == '\r')
 			n_gts--;
 
-// skip to next column
-#define next(x) \
-		while (*x != ' ' && *x != '\t') x++; \
-		while (*x == ' ' || *x == '\t') x++;
-
 		// columns are: snpid chrom gpos pos ref alt
 		next(c);
+		chrom = atoi(c);
 		next(c);
 		next(c);
+		pos = atoi(c);
 		next(c);
-
 		ref = *c;
 		next(c);
 		alt = *c;
@@ -106,8 +187,8 @@ parse_eig(opt_t *opt)
 		if (ref == '\n' || ref == '\r' || alt == '\n' || alt == '\r') {
 			fprintf(stderr, "%s: line %jd: missing ref/alt field(s)\n",
 					opt->snp_fn, (intmax_t)n_sites+1);
-			ret = -5;
-			goto err4;
+			ret = -6;
+			goto err5;
 		}
 
 		// check for invariant or singletons sites
@@ -127,6 +208,26 @@ parse_eig(opt_t *opt)
 		if (opt->ignore_singleton && (alt_i == 1 || ref_i == 1))
 			continue;
 
+		if (opt->regions_fn) {
+			interval_t *l = NULL, *u = NULL;
+			interval_t x = {(uint64_t)chrom<<32 | pos, 0};
+
+			// get nearest lower and upper entries to pos in the b-tree
+			kb_interval(bed, bt, x, &l, &u);
+
+			/*
+			printf("[%d,%d], l=[%d,%d], u=[%d,%d], skip=%d\n",
+					chrom, pos,
+					l ? (uint32_t)l->left : -1, l ? l->right: -1,
+					u ? (uint32_t)u->left : -1, u ? u->right: -1,
+					l==NULL || (l && pos > l->right));
+			*/
+
+			if (l == NULL || (l && pos > l->right))
+				// not in the intervals
+				continue;
+		}
+
 		fputs(gbuf, out_geno_fp);
 		fputs(sbuf, out_snp_fp);
 
@@ -137,17 +238,20 @@ parse_eig(opt_t *opt)
 		fprintf(stderr, "getline: %s: %s\n",
 				gnbytes==-1 ? opt->geno_fn : opt->snp_fn,
 				strerror(errno));
-		ret = -6;
-		goto err4;
+		ret = -7;
+		goto err5;
 	} else if (gnbytes != -1 || snbytes != -1) {
 		fprintf(stderr, "%s has more entries than %s -- truncated file?\n",
 				gnbytes!=-1 ? opt->geno_fn : opt->snp_fn,
 				gnbytes!=-1 ? opt->snp_fn : opt->geno_fn);
-		ret = -7;
-		goto err4;
+		ret = -8;
+		goto err5;
 	}
 
 	ret = 0;
+err5:
+	if (opt->regions_fn)
+		kb_destroy(bed, bt);
 err4:
 	if (gbuflen)
 		free(gbuf);
@@ -171,6 +275,8 @@ usage(char *argv0)
 	fprintf(stderr, "usage: %s [...] file.geno file.snp\n", argv0);
 	fprintf(stderr, "   -m               Output monomorphic sites [no]\n");
 	fprintf(stderr, "   -s               Output singleton sites [no]\n");
+	fprintf(stderr, "   -R BED           Output only the regions specified in the bed file []\n"
+			"                        (intervals must be non-overlapping)\n");
 	fprintf(stderr, "   -o STR           Output file prefix [eigreduce.out]\n");
 	exit(1);
 }
@@ -178,15 +284,18 @@ usage(char *argv0)
 int
 main(int argc, char **argv)
 {
-	opt_t opt;
+	opt_t opt = {0,};
 	int c;
 
 	opt.oprefix = "eigreduce.out";
 	opt.ignore_monomorphic = 1;
 	opt.ignore_singleton = 1;
 
-	while ((c = getopt(argc, argv, "mso:")) != -1) {
+	while ((c = getopt(argc, argv, "mso:R:")) != -1) {
 		switch (c) {
+			case 'R':
+				opt.regions_fn = optarg;
+				break;
 			case 'o':
 				opt.oprefix = optarg;
 				break;
