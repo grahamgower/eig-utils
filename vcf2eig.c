@@ -32,6 +32,7 @@ typedef struct {
 	int ignore_monomorphic;
 	int ignore_singleton;
 	int ignore_uninformative;
+	int haploidise_majority_allele;
 	int num_autosomes;
 	int filter_pass;
 	char *filter_str;
@@ -245,6 +246,15 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 						gt[x++] = 0;
 					continue;
 				} else {
+					if (opt->haploidise_majority_allele) {
+						if (dp_ref > dp_alt) {
+							gt[x++] = 2;
+							continue;
+						} else if (dp_ref < dp_alt) {
+							gt[x++] = 0;
+							continue;
+						}
+					}
 					// randomly select a read
 					gt[x++] = (nrand48(xsubi) % (dp_ref + dp_alt) < dp_ref) ? 2 : 0;
 				}
@@ -333,6 +343,11 @@ err0:
 void
 usage(char *argv0)
 {
+	fprintf(stderr, "Convert vcfs to Eigenstrat/AdmixTools format.\n\n"
+			" Only biallelic SNPs are considered, and genotypes are haploidised.\n"
+			" REF or ALT is called by randomly sampling in proportion to depth\n"
+			" using FORMAT/DPR or FORMAT/AD fields.\n\n");
+
 	fprintf(stderr, "usage: %s [...] file1.vcf [... fileN.vcf]\n", argv0);
 	fprintf(stderr, "   -r STR           Comma separated list of regions to include []\n");
 	fprintf(stderr, "   -R FILE          Bed file listing regions to include []\n");
@@ -344,6 +359,7 @@ usage(char *argv0)
 	fprintf(stderr, "   -F STR           Ignore sites with STR in any file's FILTER column []\n");
 	fprintf(stderr, "   -a INT           Number of autosomes [29]\n");
 	fprintf(stderr, "   -o STR           Output file prefix [out]\n");
+	fprintf(stderr, "   -j               Use majority allele for genotype call [no]\n");
 	exit(1);
 }
 
@@ -361,10 +377,11 @@ main(int argc, char **argv)
 	opt.ignore_monomorphic = 1;
 	opt.ignore_singleton = 1;
 	opt.ignore_uninformative = 1;
+	opt.haploidise_majority_allele = 0;
 	opt.num_autosomes = 29;
 	opt.oprefix = "out";
 
-	while ((c = getopt(argc, argv, "a:r:R:o:F:tmsuf")) != -1) {
+	while ((c = getopt(argc, argv, "a:r:R:o:F:tmsufj")) != -1) {
 		switch (c) {
 			case 't':
 				opt.ignore_transitions = 1;
@@ -399,6 +416,9 @@ main(int argc, char **argv)
 				break;
 			case 'F':
 				opt.filter_str = optarg;
+				break;
+			case 'j':
+				opt.haploidise_majority_allele = 1;
 				break;
 			default:
 				usage(argv[0]);
