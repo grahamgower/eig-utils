@@ -40,9 +40,16 @@ typedef struct {
 	int ignore_singleton;
 	char *geno_fn;
 	char *snp_fn;
+	char *ind_fn;
+	char *new_ind_fn;
 	char *regions_fn;
 	char *oprefix;
 } opt_t;
+
+typedef struct ind {
+	char *s; // name
+	struct ind *next;
+} indlist_t;
 
 /*
  * Parse bed intervals and place into a b-tree.
@@ -103,6 +110,81 @@ err0:
 	return bt;
 }
 
+void
+free_indlist(indlist_t *head)
+{
+	indlist_t *ind;
+	for (ind=head; ind!=NULL; ) {
+		indlist_t *tmp = ind;
+		ind = ind->next;
+		free(tmp->s);
+		free(tmp);
+	}
+}
+
+int
+parse_ind(char *fn, indlist_t **indlist, int *n)
+{
+	int ret;
+	FILE *fp;
+	char *buf = NULL;
+	size_t buflen = 0;
+	int n_indivs = 0;
+	indlist_t *head = NULL, *cur = NULL;
+
+	*indlist = NULL;
+	*n = 0;
+
+	fp = fopen(fn, "r");
+	if (fp == NULL) {
+		fprintf(stderr, "fopen: %s: %s\n", fn, strerror(errno));
+		ret = -1;
+		goto err0;
+	}
+
+	while (getline(&buf, &buflen, fp) != -1) {
+		char *c = buf;
+		while (*c != ' ' && *c != '\t' && *c != '\n' && *c != '\r')
+			c++;
+		*c = '\0';
+
+		indlist_t *ind = calloc(1, sizeof(indlist_t));
+		if (ind == NULL) {
+			fprintf(stderr, "calloc: %s\n", strerror(errno));
+			ret = -2;
+			goto err1;
+		}
+		ind->s = strdup(buf);
+		ind->next = NULL;
+		if (head == NULL)
+			head = cur = ind;
+		else {
+			cur->next = ind;
+			cur = ind;
+		}
+		n_indivs++;
+	}
+
+	if (errno) {
+		fprintf(stderr, "getline: %s: %s", fn, strerror(errno));
+		ret = -3;
+		goto err1;
+	}
+
+	*indlist = head;
+	*n = n_indivs;
+	ret = 0;
+
+err1:
+	if (ret)
+		free_indlist(head);
+	if (buflen)
+		free(buf);
+	fclose(fp);
+err0:
+	return ret;
+}
+
 int
 parse_eig(opt_t *opt)
 {
@@ -116,6 +198,8 @@ parse_eig(opt_t *opt)
 	int64_t n_sites;
 	char tmpfn[4096];
 	kbtree_t(bed) *bt = NULL;
+	int *ind_map = NULL;
+	int n_old, n_new;
 
 	geno_fp = fopen(opt->geno_fn, "r");
 	if (geno_fp == NULL) {
@@ -147,11 +231,51 @@ parse_eig(opt_t *opt)
 		goto err3;
 	}
 
+	if (opt->new_ind_fn) {
+		indlist_t *x, *y, *old_ind, *new_ind;
+		int oi, ni;
+
+		if (parse_ind(opt->ind_fn, &old_ind, &n_old)) {
+			ret = -5;
+			goto err4;
+		}
+		if (parse_ind(opt->new_ind_fn, &new_ind, &n_new)) {
+			free_indlist(old_ind);
+			ret = -6;
+			goto err4;
+		}
+
+		ind_map = malloc(n_new*sizeof(int));
+		if (ind_map == NULL) {
+			perror("malloc");
+			free_indlist(old_ind);
+			free_indlist(new_ind);
+			ret = -7;
+			goto err4;
+		}
+
+		for (x=new_ind, ni=0; x!=NULL; x=x->next, ni++) {
+			for (y=old_ind, oi=0; y!=NULL; y=y->next, oi++) {
+				if (!strcmp(x->s, y->s))
+					break;
+			}
+			if (oi == n_old) {
+				fprintf(stderr, "%s: %s not found in %s\n",
+						opt->new_ind_fn, x->s, opt->ind_fn);
+				free_indlist(old_ind);
+				free_indlist(new_ind);
+				ret = -8;
+				goto err5;
+			}
+			ind_map[ni] = oi;
+		}
+	}
+
 	if (opt->regions_fn) {
 		bt = parse_bed(opt->regions_fn);
 		if (bt == NULL) {
-			ret = -5;
-			goto err4;
+			ret = -9;
+			goto err5;
 		}
 	}
 
@@ -187,26 +311,32 @@ parse_eig(opt_t *opt)
 		if (ref == '\n' || ref == '\r' || alt == '\n' || alt == '\r') {
 			fprintf(stderr, "%s: line %jd: missing ref/alt field(s)\n",
 					opt->snp_fn, (intmax_t)n_sites+1);
-			ret = -6;
-			goto err5;
+			ret = -10;
+			goto err6;
 		}
 
-		// check for invariant or singletons sites
-		int ref_i = 0, alt_i = 0;
-		for (i=0; i<n_gts; i++) {
-			switch (gbuf[i]) {
-				case '2':
-					ref_i++;
-					break;
-				case '0':
-					alt_i++;
-					break;
+		if (opt->new_ind_fn)
+			n_gts = n_new;
+
+		if (opt->ignore_monomorphic || opt->ignore_singleton) {
+			// check for invariant or singletons sites
+			int ref_i = 0, alt_i = 0;
+			for (i=0; i<n_gts; i++) {
+				int j = opt->new_ind_fn ? ind_map[i] : i;
+				switch (gbuf[j]) {
+					case '2':
+						ref_i++;
+						break;
+					case '0':
+						alt_i++;
+						break;
+				}
 			}
+			if (opt->ignore_monomorphic && (alt_i == 0 || ref_i == 0))
+				continue;
+			if (opt->ignore_singleton && (alt_i == 1 || ref_i == 1))
+				continue;
 		}
-		if (opt->ignore_monomorphic && (alt_i == 0 || ref_i == 0))
-			continue;
-		if (opt->ignore_singleton && (alt_i == 1 || ref_i == 1))
-			continue;
 
 		if (opt->regions_fn) {
 			interval_t *l = NULL, *u = NULL;
@@ -228,7 +358,11 @@ parse_eig(opt_t *opt)
 				continue;
 		}
 
-		fputs(gbuf, out_geno_fp);
+		for (i=0; i<n_gts; i++) {
+			int j = opt->new_ind_fn ? ind_map[i] : i;
+			fputc(gbuf[j], out_geno_fp);
+		}
+		fputc('\n', out_geno_fp);
 		fputs(sbuf, out_snp_fp);
 
 		n_sites++;
@@ -238,26 +372,29 @@ parse_eig(opt_t *opt)
 		fprintf(stderr, "getline: %s: %s\n",
 				gnbytes==-1 ? opt->geno_fn : opt->snp_fn,
 				strerror(errno));
-		ret = -7;
-		goto err5;
+		ret = -11;
+		goto err6;
 	} else if (gnbytes != -1 || snbytes != -1) {
 		fprintf(stderr, "%s has more entries than %s -- truncated file?\n",
 				gnbytes!=-1 ? opt->geno_fn : opt->snp_fn,
 				gnbytes!=-1 ? opt->snp_fn : opt->geno_fn);
-		ret = -8;
-		goto err5;
+		ret = -12;
+		goto err6;
 	}
 
 	ret = 0;
-err5:
-	if (opt->regions_fn)
-		kb_destroy(bed, bt);
-err4:
+err6:
 	if (gbuflen)
 		free(gbuf);
 	if (sbuflen)
 		free(sbuf);
 
+	if (opt->regions_fn)
+		kb_destroy(bed, bt);
+err5:
+	if (ind_map)
+		free(ind_map);
+err4:
 	fclose(out_snp_fp);
 err3:
 	fclose(snp_fp);
@@ -272,9 +409,10 @@ err0:
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "usage: %s [...] file.geno file.snp\n", argv0);
+	fprintf(stderr, "usage: %s [...] file.geno file.snp [file.ind]\n", argv0);
 	fprintf(stderr, "   -m               Output monomorphic sites [no]\n");
 	fprintf(stderr, "   -s               Output singleton sites [no]\n");
+	fprintf(stderr, "   -i NEW.IND       Output only individuals (and reorder) from NEW.IND []\n");
 	fprintf(stderr, "   -R BED           Output only the regions specified in the bed file []\n"
 			"                        (intervals must be non-overlapping)\n");
 	fprintf(stderr, "   -o STR           Output file prefix [eigreduce.out]\n");
@@ -291,10 +429,13 @@ main(int argc, char **argv)
 	opt.ignore_monomorphic = 1;
 	opt.ignore_singleton = 1;
 
-	while ((c = getopt(argc, argv, "mso:R:")) != -1) {
+	while ((c = getopt(argc, argv, "mso:R:i:")) != -1) {
 		switch (c) {
 			case 'R':
 				opt.regions_fn = optarg;
+				break;
+			case 'i':
+				opt.new_ind_fn = optarg;
 				break;
 			case 'o':
 				opt.oprefix = optarg;
@@ -310,11 +451,21 @@ main(int argc, char **argv)
 		}
 	}
 
-	if (argc-optind != 2)
+	if (argc-optind != 2 && argc-optind != 3)
 		usage(argv[0]);
 
 	opt.geno_fn = argv[optind];
 	opt.snp_fn = argv[optind+1];
+	if (argc-optind == 3) {
+		opt.ind_fn = argv[optind+2];
+	}
+
+	if (opt.new_ind_fn && opt.ind_fn == NULL) {
+		fprintf(stderr, "The .ind file matching the input data has "
+				"not been provided, but is required to use "
+				"the -i option.\n");
+		usage(argv[0]);
+	}
 
 	return parse_eig(&opt);
 }
