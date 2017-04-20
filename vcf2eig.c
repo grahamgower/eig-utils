@@ -72,7 +72,7 @@ again:
 	int d = atoi(c);
 	if (d < 1 || d > 87) {
 		fprintf(stderr, "Unsupported chromosome name ``%s''.\n"
-				"Eigensoft/AdmixTools have a hardcoded limit of 90 chromosome numbers,\n"
+				"Eigensoft/AdmixTools have a hardcoded limit of 89 chromosome numbers,\n"
 				"of which two are reserved for sex chromosomes.  If you're using contigs\n"
 				"or scaffolds, try renaming the 87 biggest to numbers.\n", chr);
 		return -1;
@@ -271,6 +271,10 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 				}
 				chr = strdup(bcf_seqname(hdr, rec));
 				chrid = chrmap(opt, bcf_seqname(hdr, rec));
+				if (chrid == -1) {
+					ret = -9;
+					goto err5;
+				}
 				pos = rec->pos+1;
 			}
 		}
