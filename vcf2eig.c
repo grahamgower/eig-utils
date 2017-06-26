@@ -35,6 +35,7 @@ typedef struct {
 	int haploidise_majority_allele;
 	int num_autosomes;
 	int filter_pass;
+	char *depth_fn;
 	char *filter_str;
 	char *regions_fn;
 	char *regions;
@@ -95,6 +96,7 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 	int *gt; // genotypes (number of REF alleles for each sample)
 	int ndpr_arr = 0;
 	int32_t *dpr_arr = NULL; // DPR or AD array
+	int *max_dp;
 
 	char ref, alt;
 
@@ -167,6 +169,92 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 	}
 	fclose(ind_fp);
 
+	max_dp = calloc(nsamples, sizeof(int));
+	if (max_dp == NULL) {
+		perror("calloc");
+		ret = -8;
+		goto err4;
+	}
+
+	if (opt->depth_fn) {
+		FILE *fp;
+		char *linebuf = NULL;
+		size_t linebuflen = 0;
+		ssize_t nbytes;
+
+		fp = fopen(opt->depth_fn, "r");
+		if (fp == NULL) {
+			fprintf(stderr, "%s: %s\n", opt->depth_fn, strerror(errno));
+			ret = -9;
+			goto err5;
+		}
+
+		// parse max depths into max_dp; this is O(nsamples^2)
+		for (;;) {
+			int dp;
+			int x; // sample index
+			char *p;
+			char *sample;
+
+			errno = 0;
+			if ((nbytes = getline(&linebuf, &linebuflen, fp)) == -1) {
+				if (errno) {
+					fprintf(stderr, "getline: %s: %s\n",
+							opt->depth_fn, strerror(errno));
+					fclose(fp);
+					ret = -10;
+					goto err5;
+				}
+				break;
+			}
+
+			if (linebuf[nbytes-1] == '\n')
+				linebuf[nbytes-1] = 0;
+
+			p = linebuf;
+
+			// columns are: sample maxDepth
+			sample = p;
+
+			// skip to end of string and null terminate
+			while (*p != ' ' && *p != '\t')
+				p++;
+			*(p++) = '\0';
+
+			// next column
+			while (*p == ' ' || *p == '\t')
+				p++;
+
+			dp = atoi(p);
+
+			for (i=0, x=0; i<sr->nreaders; i++) {
+				hdr = bcf_sr_get_header(sr, i);
+				for (j=0; j<bcf_hdr_nsamples(hdr); j++, x++) {
+					if (!strcmp(sample, bcf_hdr_int2id(hdr, BCF_DT_SAMPLE, j)))
+						break;
+				}
+				if (j != bcf_hdr_nsamples(hdr))
+					break;
+			}
+			if (x < nsamples) {
+				// got one
+				max_dp[x] = dp;
+			}
+
+		}
+
+		/* manually verify samples names were as expected
+		int x;
+		for (i=0, x=0; i<sr->nreaders; i++) {
+			hdr = bcf_sr_get_header(sr, i);
+			for (j=0; j<bcf_hdr_nsamples(hdr); j++, x++) {
+				fprintf(stderr, "%s\t%d\n", bcf_hdr_int2id(hdr, BCF_DT_SAMPLE, j), max_dp[x]);
+			}
+		}*/
+
+		fclose(fp);
+	}
+
 	unsigned short xsubi[3] = {31,41,59}; // random state
 	char *chr = NULL;
 
@@ -201,8 +289,8 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 				if (bcf_get_format_int32(hdr, rec, "AD", &dpr_arr, &ndpr_arr) < 1) {
 					fprintf(stderr, "Error: %s: no FORMAT/DPR nor FORMAT/AD field at %s:%d.\n",
 						vcflist[i], bcf_seqname(hdr, rec), rec->pos+1);
-					ret = -8;
-					goto err5;
+					ret = -11;
+					goto err6;
 				}
 			}
 
@@ -246,6 +334,12 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 						gt[x++] = 0;
 					continue;
 				} else {
+					if (max_dp[x] && dp_ref+dp_alt > max_dp[x]) {
+						// depth outlier, ignore
+						gt[x++] = 9;
+						continue;
+					}
+
 					if (opt->haploidise_majority_allele) {
 						if (dp_ref > dp_alt) {
 							gt[x++] = 2;
@@ -272,8 +366,8 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 				chr = strdup(bcf_seqname(hdr, rec));
 				chrid = chrmap(opt, bcf_seqname(hdr, rec));
 				if (chrid == -1) {
-					ret = -9;
-					goto err5;
+					ret = -12;
+					goto err6;
 				}
 				pos = rec->pos+1;
 			}
@@ -327,11 +421,13 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 	}
 
 	ret = 0;
-err5:
+err6:
 	if (dpr_arr != NULL)
 		free(dpr_arr);
 	if (chr)
 		free(chr);
+err5:
+	free(max_dp);
 err4:
 	fclose(geno_fp);
 err3:
@@ -364,6 +460,7 @@ usage(char *argv0)
 	fprintf(stderr, "   -a INT           Number of autosomes [29]\n");
 	fprintf(stderr, "   -o STR           Output file prefix [out]\n");
 	fprintf(stderr, "   -j               Use majority allele for genotype call [no]\n");
+	fprintf(stderr, "   -d FILE          Max depth for samples (file format: Sample\tMaxDepth) []\n");
 	exit(1);
 }
 
@@ -373,6 +470,7 @@ main(int argc, char **argv)
 	opt_t opt;
 	int c;
 
+	opt.depth_fn = NULL;
 	opt.filter_str = NULL;
 	opt.filter_pass = 0;
 	opt.regions_fn = NULL;
@@ -385,7 +483,7 @@ main(int argc, char **argv)
 	opt.num_autosomes = 29;
 	opt.oprefix = "out";
 
-	while ((c = getopt(argc, argv, "a:r:R:o:F:tmsufj")) != -1) {
+	while ((c = getopt(argc, argv, "a:d:r:R:o:F:tmsufj")) != -1) {
 		switch (c) {
 			case 't':
 				opt.ignore_transitions = 1;
@@ -423,6 +521,9 @@ main(int argc, char **argv)
 				break;
 			case 'j':
 				opt.haploidise_majority_allele = 1;
+				break;
+			case 'd':
+				opt.depth_fn = optarg;
 				break;
 			default:
 				usage(argv[0]);
