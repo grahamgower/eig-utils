@@ -19,7 +19,12 @@
 #include <getopt.h>
 #include <errno.h>
 #include <stdint.h>
+#include <ctype.h>
 #include <math.h>
+
+typedef struct {
+	size_t binsize;
+} opt_t;
 
 typedef struct ind {
 	char *s; // name
@@ -102,7 +107,7 @@ err0:
 }
 
 int
-parse_eig(char *ind_fn, char *geno_fn, char *snp_fn)
+parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 {
 	int i, j, x;
 	int ret;
@@ -113,7 +118,10 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn)
 	indlist_t *indlist, *ind1,  *ind2;
 	int n_indivs;
 	int64_t n_sites;
-	int64_t *sumsq, *nsites;
+	int64_t *diffs, *nsites;
+
+	int chrom, pos;
+	int last_chrom = -1, last_pos = -1;
 
 	if (parse_ind(ind_fn, &indlist, &n_indivs) < 0) {
 		ret = -1;
@@ -135,8 +143,8 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn)
 	}
 
 	nsites = calloc(sizeof(int64_t), n_indivs*(n_indivs-1)/2);
-	sumsq = calloc(sizeof(int64_t), n_indivs*(n_indivs-1)/2);
-	if (nsites == NULL || sumsq == NULL) {
+	diffs = calloc(sizeof(int64_t), n_indivs*(n_indivs-1)/2);
+	if (nsites == NULL || diffs == NULL) {
 		perror("calloc");
 		ret = -4;
 		goto err3;
@@ -146,7 +154,25 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn)
 	gbuf = sbuf = NULL;
 	gbuflen = sbuflen = 0;
 
-	int gtmap[] = {['0']=0, ['1']=-0x1000, ['2']=1, ['9']=-0x1000};
+	int gtmap[256];
+	for (i=0; i<256; i++)
+		gtmap[i] = 0xf;
+	gtmap['0'] = 0;
+	gtmap['2'] = 1;
+
+	if (opt->binsize > 0) {
+		// header
+		printf("Locus\t");
+		for (x=0, ind1=indlist; ind1!=NULL; ind1=ind1->next) {
+			for (ind2=ind1->next; ind2!=NULL; x++, ind2=ind2->next) {
+				printf("%s|%s|N\t%s|%s|D", ind1->s, ind2->s, ind1->s, ind2->s);
+				if (ind1->next || ind2->next)
+					printf("\t");
+			}
+		}
+		printf("\n");
+	}
+
 
 	for (;;) {
 		gnbytes = getline(&gbuf, &gbuflen, geno_fp);
@@ -175,8 +201,10 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn)
 
 		// columns are: snpid chrom gpos pos ref alt
 		next(c);
+		chrom = atoi(c);
 		next(c);
 		next(c);
+		pos = atoi(c);
 		next(c);
 
 		ref = *c;
@@ -192,13 +220,31 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn)
 
 		//
 
+		if (opt->binsize > 0 && (chrom != last_chrom || last_pos+opt->binsize < pos)) {
+			if (last_chrom != -1) {
+				printf("%d:%d\t", last_chrom, last_pos);
+				for (x=0, ind1=indlist; ind1!=NULL; ind1=ind1->next) {
+					for (ind2=ind1->next; ind2!=NULL; x++, ind2=ind2->next) {
+						printf("%jd\t%jd", nsites[x], diffs[x]);
+						if (ind1->next || ind2->next)
+							printf("\t");
+					}
+				}
+				printf("\n");
+				memset(nsites, 0, sizeof(int64_t)*n_indivs*(n_indivs-1)/2);
+				memset(diffs, 0, sizeof(int64_t)*n_indivs*(n_indivs-1)/2);
+			}
+			last_chrom = chrom;
+			last_pos = pos;
+		}
+
 		for (x=0, i=0; i<n_indivs; i++) {
 			for (j=i+1; j<n_indivs; x++, j++) {
-				if (gbuf[i] == '9' || gbuf[j] == '9')
-					continue;
 				int ci = gtmap[(int)gbuf[i]];
 				int cj = gtmap[(int)gbuf[j]];
-				sumsq[x] += (ci-cj)*(ci-cj);
+				if ((ci>>1) || (cj>>1))
+					continue;
+				diffs[x] += ci!=cj?1:0;
 				nsites[x]++;
 			}
 		}
@@ -220,11 +266,13 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn)
 		goto err4;
 	}
 
-	for (x=0, ind1=indlist; ind1!=NULL; ind1=ind1->next) {
-		for (ind2=ind1->next; ind2!=NULL; x++, ind2=ind2->next) {
-			printf("%s\t%s\t%g\n",
-					ind1->s, ind2->s,
-					(double)sumsq[x]/nsites[x]);
+	if (opt->binsize == 0) {
+		for (x=0, ind1=indlist; ind1!=NULL; ind1=ind1->next) {
+			for (ind2=ind1->next; ind2!=NULL; x++, ind2=ind2->next) {
+				printf("%s\t%s\t%g\n",
+						ind1->s, ind2->s,
+						(double)diffs[x]/nsites[x]);
+			}
 		}
 	}
 
@@ -237,8 +285,8 @@ err4:
 err3:
 	if (nsites)
 		free(nsites);
-	if (sumsq)
-		free(sumsq);
+	if (diffs)
+		free(diffs);
 	fclose(snp_fp);
 err2:
 	fclose(geno_fp);
@@ -248,28 +296,54 @@ err0:
 	return ret;
 }
 
+int
+parse_bp(char *s)
+{
+	int x;
+
+	switch (tolower(s[strlen(s)-1])) {
+		case 'k':
+			x = 1000;
+			break;
+		case 'm':
+			x = 1000000;
+			break;
+		default:
+			x = 1;
+			break;
+	}
+
+	return x*atoi(s);
+}
+
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "usage: %s f.ind f.geno f.snp\n", argv0);
+	fprintf(stderr, "usage: %s [-b BINSIZE] f.ind f.geno f.snp\n", argv0);
 	exit(1);
 }
 
 int
 main(int argc, char **argv)
 {
-	/*
+	opt_t opt;
 	int c;
-	while ((c = getopt(argc, argv, "")) != -1) {
+
+	memset(&opt, 0, sizeof(opt));
+
+	while ((c = getopt(argc, argv, "b:")) != -1) {
 		switch (c) {
+			case 'b':
+				opt.binsize = parse_bp(optarg);
+				break;
 			default:
 				usage(argv[0]);
 		}
-	}*/
+	}
 
 	if (argc-optind != 3)
 		usage(argv[0]);
 
-	return parse_eig(argv[optind], argv[optind+1], argv[optind+2]);
+	return parse_eig(&opt, argv[optind], argv[optind+1], argv[optind+2]);
 }
 
