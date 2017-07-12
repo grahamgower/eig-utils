@@ -1,6 +1,6 @@
 HTSPROGS=vcf2eig
-BASEPROGS=eig2phylip eigreduce
-PROGS=$(BASEPROGS) $(HTSPROGS)
+BASEPROGS=eig2phylip eigreduce distance
+PROGS=$(BASEPROGS) $(HTSPROGS) abba-baba
 ZLIB=/opt/shared/zlib/1.2.8-gnu_4.8.0/lib
 HTSDIR=../../../htslib
 HTSFLAGS=-I$(HTSDIR)
@@ -17,5 +17,8 @@ $(HTSPROGS): $$@.o
 $(BASEPROGS): $$@.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
+abba-baba: $$@.o kmath.o
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS) -lm
+
 clean:
-	rm -f $(PROGS) $(addsuffix .o,$(PROGS))
+	rm -f $(PROGS) $(addsuffix .o,$(PROGS)) kmath.o
