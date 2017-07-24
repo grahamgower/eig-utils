@@ -20,7 +20,7 @@ def parse_tsv(fn):
             if pops not in counts:
                 counts[pops] = []
                 quadlist.append(pops)
-            counts[pops].append(map(int, fields[6:]))
+            counts[pops].append(map(float, fields[6:]))
     return quadlist, counts
 
 if __name__ == "__main__":
@@ -40,52 +40,82 @@ if __name__ == "__main__":
     ABBA=6
     BABA=7
     nsites=8
+    F4sum=9
+    Ddensum=10
+    F4bc=11
 
-    print("P1\tP2\tP3\tP4\tD\tSTD\tZ\tDbc\tSTDbc\tZbc\tABBA\tBABA\tNSITES\tBC")
+    print("P1\tP2\tP3\tP4\tD\tD_STD\tD_Z\tDbc\tDbc_STD\tDbc_Z\tD2\tD2_STD\tD2_Z\tD2bc\tD2bc_STD\tD2bc_Z\tF4\tF4_STD\tF4_Z\tF4bc\tF4bc_STD\tF4bc_Z\tABBA\tBABA\tNSITES")
+
+    def do_jack(xx, weights):
+        n = len(xx)
+        mean = np.sum(w*x for x,w in zip(xx,weights)) / float(n-1)
+        var = np.sum(w*(x-mean)**2 for x,w in zip(xx,weights)) * float(n-1) / n
+        std = np.sqrt(var)
+        if std == 0:
+            Z = float('nan')
+        else:
+            Z = mean/std
+        return mean,std,Z
 
     for quad in quadlist:
         m = counts[quad]
         sums = np.sum(m, axis=0)
         D_jack = []
-        D_jack_bc = [] # branch corrected
+        Dbc_jack = [] # branch corrected
         bc_jack = []
+        f4_jack = []
+        f4bc_jack = []
+        D2_jack = []
+        D2bc_jack = []
         weights = []
         for row in m:
-            jrow = [(sums[i]-row[i]) for i in range(9)]
+            jrow = [(sums[i]-row[i]) for i in range(F4bc+1)]
             numer = jrow[ABBA] - jrow[BABA]
             denom = jrow[ABBA] + jrow[BABA]
-            if denom == 0:
+            if denom == 0 or jrow[Ddensum] == 0:
                 continue
 
             if jrow[AAAA]:
-                # branch length correction, see Green et al. SOM pg138-139.
+                # ABBA-BABA branch length correction, see Green et al. SOM pg138-139.
                 bc = (jrow[AABA]-jrow[AAAB])*(jrow[ABAA]-jrow[BAAA]) / float(jrow[AAAA])
+                bc_abba = (jrow[AABA]*jrow[ABAA] + jrow[AAAB]*jrow[BAAA]) / float(jrow[AAAA])
+                bc_baba = (jrow[AABA]*jrow[BAAA] + jrow[AAAB]*jrow[ABAA]) / float(jrow[AAAA])
             else:
                 bc = 0
 
             weight = float(jrow[nsites]) / sums[nsites]
             weights.append(weight)
+
+            # ABBA-BABA (randomly sample allele from population)
             D_jack.append(float(numer)/denom)
-            D_jack_bc.append(float(numer-bc)/denom)
+            Dbc_jack.append(float(numer-bc)/(denom-bc_abba-bc_baba))
+
+            # ABBA-BABA branch correction
             bc_jack.append(bc)
 
-        n = len(D_jack)
-        D_mean = np.sum(w*d for d,w in zip(D_jack,weights)) / float(n-1)
-        D_var = np.sum(w*(d-D_mean)**2 for d,w in zip(D_jack,weights)) * float(n-1) / n
-        D_std = np.sqrt(D_var)
-        if D_std == 0:
-            Z = float('nan')
-        else:
-            Z = D_mean/D_std
+            # D statistic (using allele frequencies)
+            D2_jack.append(jrow[F4sum] / jrow[Ddensum])
+            D2bc_jack.append((jrow[F4sum] -jrow[F4bc]) / jrow[Ddensum])
 
-        D_mean_bc = np.sum(w*d for d,w in zip(D_jack_bc,weights)) / float(n-1)
-        D_var_bc = np.sum(w*(d-D_mean_bc)**2 for d,w in zip(D_jack_bc,weights)) * float(n-1) / n
-        D_std_bc = np.sqrt(D_var_bc)
-        if D_std_bc == 0:
-            Z_bc = float('nan')
-        else:
-            Z_bc = D_mean_bc/D_std_bc
+            # F4
+            f4_jack.append(jrow[F4sum] / jrow[nsites])
+            f4bc_jack.append((jrow[F4sum] -jrow[F4bc]) / jrow[nsites])
 
-        bc = np.sum(w*e for e,w in zip(bc_jack,weights)) / float(n-1)
+        D_mean, D_std, D_Z = do_jack(D_jack, weights)
+        Dbc_mean, Dbc_std, Dbc_Z = do_jack(Dbc_jack, weights)
+        D2_mean, D2_std, D2_Z = do_jack(D2_jack, weights)
+        D2bc_mean, D2bc_std, D2bc_Z = do_jack(D2bc_jack, weights)
+        f4_mean, f4_std, f4_Z = do_jack(f4_jack, weights)
+        f4bc_mean, f4bc_std, f4bc_Z = do_jack(f4bc_jack, weights)
 
-        print(quad[0], quad[1], quad[2], quad[3], D_mean, D_std, Z, D_mean_bc, D_std_bc, Z_bc, sums[ABBA], sums[BABA], sums[nsites], bc, sep="\t")
+        #bc,_,_,_ = do_jack(bc_jack, weights)
+
+        print(quad[0], quad[1], quad[2], quad[3],
+                D_mean, D_std, D_Z,
+                Dbc_mean, Dbc_std, Dbc_Z,
+                D2_mean, D2_std, D2_Z,
+                D2bc_mean, D2bc_std, D2bc_Z,
+                f4_mean, f4_std, f4_Z,
+                f4bc_mean, f4bc_std, f4bc_Z,
+                int(sums[ABBA]), int(sums[BABA]), int(sums[nsites]),
+                sep="\t")

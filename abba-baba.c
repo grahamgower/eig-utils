@@ -44,6 +44,7 @@ typedef struct ind {
 typedef struct group {
 	char *g;
 	int *ii; // indexes of individuals
+	int gi; // group index
 	int n_inds;
 	struct group *next;
 } grouplist_t;
@@ -243,16 +244,16 @@ parse_ind(char *fn, indlist_t **indlist, int *_n_inds, grouplist_t **grouplist, 
 				ret = -3;
 				goto err1;
 			}
-			gr->next = NULL;
 			if (ghead == NULL)
 				ghead = gcur = gr;
 			else {
 				gcur->next = gr;
 				gcur = gr;
 			}
+			gr->next = NULL;
 			gr->g = strdup(ind->g);
-			n_groups++;
-			//printf("adding group[%d]: `%s'\n", n_groups-1, gr->g);
+			gr->gi = n_groups++;
+			//printf("adding group[%d]: `%s'\n", gr->gi, gr->g);
 		}
 
 		// append individual to group's index list
@@ -305,12 +306,11 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 	grouplist_t *grouplist, *group;
 	quadpop_t *quadlist, *quad;
 	int n_indivs, n_groups, n_quads;
-	int max_group_size;
 
 	int chrom = -1, pos = -1;
 	int last_chrom = -1, last_pos = -1;
 
-	struct count_t {
+	struct {
 		uint64_t aaaa;
 		uint64_t aaab;
 		uint64_t aaba;
@@ -320,22 +320,48 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 		uint64_t abba;
 		uint64_t baba;
 		uint64_t nsites;
+
+		double f4_sum; // F4, or D numerator
+		double den_sum; // D denominator
+
+		double bc_num_sum;
+		double bc_den_sum;
 	} *counts;
+
+	struct {
+		uint64_t ac; // (ref) allele count
+		uint64_t n; // number of observations
+	} *saf;
+	int *ind2group;
 
 
 	if (parse_ind(ind_fn, &indlist, &n_indivs, &grouplist, &n_groups) < 0) {
 		ret = -1;
 		goto err0;
 	}
-	max_group_size = 0;
+
+	saf = calloc(n_groups, sizeof(*saf));
+	if (saf == NULL) {
+		perror("calloc");
+		ret = -2;
+		goto err1;
+	}
+
+	ind2group = calloc(n_indivs, sizeof(*ind2group));
+	if (ind2group == NULL) {
+		perror("calloc");
+		ret = -3;
+		goto err2;
+	}
+
 	for (group=grouplist; group!=NULL; group=group->next) {
-		if (group->n_inds > max_group_size)
-			max_group_size = group->n_inds;
+		for (i=0; i<group->n_inds; i++)
+			ind2group[group->ii[i]] = group->gi;
 	}
 
 	if (parse_quadlist(opt->quadlist_fn, &quadlist, &n_quads) < 0) {
-		ret = -2;
-		goto err1;
+		ret = -4;
+		goto err3;
 	}
 
 	for (quad=quadlist; quad!=NULL; quad=quad->next) {
@@ -350,8 +376,8 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 			if (group == NULL) {
 				fprintf(stderr, "Error: %s: group `%s' not found in %s\n",
 						opt->quadlist_fn, s, ind_fn);
-				ret = -3;
-				goto err2;
+				ret = -5;
+				goto err4;
 			}
 		}
 	}
@@ -359,22 +385,22 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 	counts = calloc(n_quads, sizeof(*counts));
 	if (counts == NULL) {
 		perror("calloc");
-		ret = -4;
-		goto err2;
+		ret = -6;
+		goto err4;
 	}
 
 	geno_fp = fopen(geno_fn, "r");
 	if (geno_fp == NULL) {
 		fprintf(stderr, "fopen: %s: %s\n", geno_fn, strerror(errno));
-		ret = -5;
-		goto err3;
+		ret = -7;
+		goto err5;
 	}
 
 	snp_fp = fopen(snp_fn, "r");
 	if (snp_fp == NULL) {
 		fprintf(stderr, "fopen: %s: %s\n", snp_fn, strerror(errno));
-		ret = -6;
-		goto err4;
+		ret = -8;
+		goto err6;
 	}
 
 	gbuf = sbuf = NULL;
@@ -387,7 +413,7 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 	gtmap['2'] = 1;
 
 	// header
-	printf("chr\tblockstart\tP1\tP2\tP3\tP4\tAAAA\tAAAB\tAABA\tABAA\tBAAA\tBBAA\tABBA\tBABA\tnsites\n");
+	printf("chr\tblockstart\tP1\tP2\tP3\tP4\tAAAA\tAAAB\tAABA\tABAA\tBAAA\tBBAA\tABBA\tBABA\tnsites\tF4sum\tDdensum\tF4bc\n");
 
 	lineno = 0;
 
@@ -409,8 +435,8 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 		if (n_gts != n_indivs) {
 			fprintf(stderr, "%s has %d individuals, but %s: line %jd supplies %d genotypes\n",
 					ind_fn, n_indivs, geno_fn, lineno, n_gts);
-			ret = -8;
-			goto err5;
+			ret = -9;
+			goto err7;
 		}
 
 		// columns are: snpid chrom gpos pos ref alt
@@ -428,8 +454,8 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 		if (ref == '\n' || ref == '\r' || alt == '\n' || alt == '\r') {
 			fprintf(stderr, "%s: line %jd: missing ref/alt field(s)\n",
 					snp_fn, lineno);
-			ret = -9;
-			goto err5;
+			ret = -10;
+			goto err7;
 		}
 
 		//
@@ -437,7 +463,7 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 		if (chrom != last_chrom || last_pos+opt->binsize < pos) {
 			if (last_chrom != -1) {
 				for (i=0, quad=quadlist; quad!=NULL; quad=quad->next, i++) {
-					printf("%d\t%d\t%s\t%s\t%s\t%s\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\n",
+					printf("%d\t%d\t%s\t%s\t%s\t%s\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%lg\t%lg\t%lg\n",
 							last_chrom,
 							last_pos,
 							quad->s[0],
@@ -452,7 +478,10 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 							counts[i].bbaa,
 							counts[i].abba,
 							counts[i].baba,
-							counts[i].nsites
+							counts[i].nsites,
+							counts[i].f4_sum,
+							counts[i].den_sum,
+							counts[i].bc_num_sum / counts[i].bc_den_sum
 							);
 				}
 				memset(counts, 0, n_quads*sizeof(*counts));
@@ -461,43 +490,49 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 			last_pos = pos;
 		}
 
+		memset(saf, 0, n_groups*sizeof(*saf));
+		for (i=0; i<n_indivs; i++) {
+			int gi;
+			int x = gtmap[(int)gbuf[i]];
+			if (x == 0xf)
+				continue;
+			gi = ind2group[i];
+			saf[gi].ac += x;
+			saf[gi].n++;
+		}
+
 		for (i=0, quad=quadlist; quad!=NULL; quad=quad->next, i++) {
 			int gt[4];
-			int gtlist[max_group_size];
-			int n_gts;
-			int k;
+			double af[4];
 
 			for (j=0; j<4; j++) {
-				grouplist_t *gr = quad->gp[j];
-				if (gr->n_inds == 1) {
-					int x = gtmap[(int)gbuf[gr->ii[0]]];
-					if (x == 0xf)
-						// no data
+				int gi = quad->gp[j]->gi;
+				int ac = saf[gi].ac;
+				int n = saf[gi].n;
+
+				switch (n) {
+					case 0:
+						goto next;
+					case 1:
+						gt[j] = ac;
 						break;
-					gt[j] = x;
-					continue;
+					default:
+						if (ac == 0)
+							gt[j] = 0;
+						else if (ac == n)
+							gt[j] = 1;
+						else
+							gt[j] = (kr_rand(opt->seed) % n) < ac;
+						break;
 				}
-
-				n_gts = 0;
-				for (n_gts=0, k=0; k<gr->n_inds; k++) {
-					int x = gtmap[(int)gbuf[gr->ii[k]]];
-					if (x == 0xf)
-						continue;
-					gtlist[n_gts++] = x;
-				}
-
-				if (n_gts == 0)
-					break;
-
-				if (n_gts == 1)
-					gt[j] = gtlist[0];
-				else
-					gt[j] = gtlist[kr_rand(opt->seed) % n_gts];
+				af[j] = (double)ac/n;
 			}
 
-			if (j != 4)
+			if (0) {
+next:
 				// missing genotype(s)
 				continue;
+			}
 			
 			int pattern = gt[0]<<3 | gt[1]<<2 | gt[2]<<1 | gt[3];
 			//printf("[%x] %d%d%d%d\n", pattern, gt[0], gt[1], gt[2], gt[3]);
@@ -536,8 +571,14 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 					counts[i].baba++;
 					break;
 			}
+
 			counts[i].nsites++;
 
+			counts[i].f4_sum += (af[0]-af[1])*(af[2]-af[3]);
+			counts[i].den_sum += (af[0]+af[1] - 2*af[0]*af[1])*(af[2]+af[3] - 2*af[2]*af[3]);
+
+			counts[i].bc_num_sum += ((af[0]-af[1]*af[2]*af[3]) - (af[1]-af[0]*af[2]*af[3])) * ((af[2]-af[0]*af[1]*af[3]) - (af[3]-af[0]*af[1]*af[2]));
+			counts[i].bc_den_sum += af[0]*af[1]*af[2]*af[3];
 		}
 	}
 
@@ -545,19 +586,19 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 		fprintf(stderr, "getline: %s: %s\n",
 				gnbytes==-1 ? geno_fn : snp_fn,
 				strerror(errno));
-		ret = -10;
-		goto err5;
+		ret = -11;
+		goto err7;
 	} else if (gnbytes != -1 || snbytes != -1) {
 		fprintf(stderr, "%s has more entries than %s -- truncated file?\n",
 				gnbytes!=-1 ? geno_fn : snp_fn,
 				gnbytes!=-1 ? snp_fn : geno_fn);
-		ret = -11;
-		goto err5;
+		ret = -12;
+		goto err7;
 	}
 
 	if (chrom != last_chrom || last_pos != pos) {
 		for (i=0, quad=quadlist; quad!=NULL; quad=quad->next, i++) {
-			printf("%d\t%d\t%s\t%s\t%s\t%s\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\n",
+			printf("%d\t%d\t%s\t%s\t%s\t%s\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%jd\t%lg\t%lg\t%lg\n",
 					last_chrom,
 					last_pos,
 					quad->s[0],
@@ -572,27 +613,34 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 					counts[i].bbaa,
 					counts[i].abba,
 					counts[i].baba,
-					counts[i].nsites
+					counts[i].nsites,
+					counts[i].f4_sum,
+					counts[i].den_sum,
+					counts[i].bc_num_sum / counts[i].bc_den_sum
 					);
 		}
 	}
 
 	ret = 0;
-err5:
+err7:
 	if (gbuflen)
 		free(gbuf);
 	if (sbuflen)
 		free(sbuf);
 	fclose(snp_fp);
-err4:
+err6:
 	fclose(geno_fp);
-err3:
+err5:
 	free(counts);
-err2:
+err4:
 	free_quadlist(quadlist);
-err1:
+err3:
 	free_indlist(indlist);
 	free_grouplist(grouplist);
+err2:
+	free(ind2group);
+err1:
+	free(saf);
 err0:
 	return ret;
 }
