@@ -198,7 +198,7 @@ parse_ind(char *fn, indlist_t **indlist, int *_n_inds, grouplist_t **grouplist, 
 	}
 
 	while (getline(&buf, &buflen, fp) != -1) {
-		char *c0, *c = buf;
+		char *c, *c0 = buf;
 
 		indlist_t *ind = calloc(1, sizeof(indlist_t));
 		if (ind == NULL) {
@@ -215,7 +215,11 @@ parse_ind(char *fn, indlist_t **indlist, int *_n_inds, grouplist_t **grouplist, 
 		}
 		n_inds++;
 
-		c0 = c;
+		/* skip leading spaces created by EIGENSOFT */
+		while (*c0 == ' ' || *c0 == '\t')
+			c0++;
+
+		c = c0;
 		while (*c != ' ' && *c != '\t' && *c != '\n' && *c != '\r')
 			c++;
 		*(c++) = '\0';

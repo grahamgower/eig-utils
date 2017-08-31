@@ -19,6 +19,7 @@
 #include <getopt.h>
 #include <errno.h>
 #include <stdint.h>
+#include <ctype.h>
 
 #include "kbtree.h"
 
@@ -38,6 +39,7 @@ KBTREE_INIT(bed, interval_t, left_cmp);
 typedef struct {
 	int ignore_monomorphic;
 	int ignore_singleton;
+	int thinning_interval;
 	char *geno_fn;
 	char *snp_fn;
 	char *ind_fn;
@@ -143,7 +145,13 @@ parse_ind(char *fn, indlist_t **indlist, int *n)
 	}
 
 	while (getline(&buf, &buflen, fp) != -1) {
-		char *c = buf;
+		char *c, *c0 = buf;
+
+		/* skip leading spaces created by EIGENSOFT */
+		while (*c0 == ' ' || *c0 == '\t')
+			c0++;
+
+		c = c0;
 		while (*c != ' ' && *c != '\t' && *c != '\n' && *c != '\r')
 			c++;
 		*c = '\0';
@@ -154,7 +162,7 @@ parse_ind(char *fn, indlist_t **indlist, int *n)
 			ret = -2;
 			goto err1;
 		}
-		ind->s = strdup(buf);
+		ind->s = strdup(c0);
 		ind->next = NULL;
 		if (head == NULL)
 			head = cur = ind;
@@ -195,11 +203,13 @@ parse_eig(opt_t *opt)
 	char *gbuf, *sbuf;
 	size_t gbuflen, sbuflen;
 	ssize_t gnbytes, snbytes;
-	int64_t n_sites;
+	int64_t lineno;
 	char tmpfn[4096];
 	kbtree_t(bed) *bt = NULL;
 	int *ind_map = NULL;
 	int n_old, n_new;
+
+	int32_t last_chrom, last_pos;
 
 	geno_fp = fopen(opt->geno_fn, "r");
 	if (geno_fp == NULL) {
@@ -279,11 +289,13 @@ parse_eig(opt_t *opt)
 		}
 	}
 
-	n_sites = 0;
+	lineno = 0;
 	gbuf = sbuf = NULL;
 	gbuflen = sbuflen = 0;
+	last_chrom = last_pos = -1;
 
 	for (;;) {
+		lineno++;
 		gnbytes = getline(&gbuf, &gbuflen, geno_fp);
 		snbytes = getline(&sbuf, &sbuflen, snp_fp);
 		if (gnbytes == -1 || snbytes == -1)
@@ -310,10 +322,13 @@ parse_eig(opt_t *opt)
 
 		if (ref == '\n' || ref == '\r' || alt == '\n' || alt == '\r') {
 			fprintf(stderr, "%s: line %jd: missing ref/alt field(s)\n",
-					opt->snp_fn, (intmax_t)n_sites+1);
+					opt->snp_fn, (intmax_t)lineno);
 			ret = -10;
 			goto err6;
 		}
+
+		if (chrom == last_chrom && pos < last_pos+opt->thinning_interval)
+			continue;
 
 		if (opt->new_ind_fn)
 			n_gts = n_new;
@@ -365,7 +380,8 @@ parse_eig(opt_t *opt)
 		fputc('\n', out_geno_fp);
 		fputs(sbuf, out_snp_fp);
 
-		n_sites++;
+		last_chrom = chrom;
+		last_pos = pos;
 	}
 
 	if (errno) {
@@ -406,6 +422,26 @@ err0:
 	return ret;
 }
 
+int
+parse_bp(char *s)
+{
+	int x;
+
+	switch (tolower(s[strlen(s)-1])) {
+		case 'k':
+			x = 1000;
+			break;
+		case 'm':
+			x = 1000000;
+			break;
+		default:
+			x = 1;
+			break;
+	}
+
+	return x*atoi(s);
+}
+
 void
 usage(char *argv0)
 {
@@ -415,6 +451,7 @@ usage(char *argv0)
 	fprintf(stderr, "   -i NEW.IND       Output only individuals (and reorder) from NEW.IND []\n");
 	fprintf(stderr, "   -R BED           Output only the regions specified in the bed file []\n"
 			"                        (intervals must be non-overlapping)\n");
+	fprintf(stderr, "   -t INT           Thin the output to no more than one site per INT bp. [1]\n");
 	fprintf(stderr, "   -o STR           Output file prefix [eigreduce.out]\n");
 	exit(1);
 }
@@ -428,23 +465,31 @@ main(int argc, char **argv)
 	opt.oprefix = "eigreduce.out";
 	opt.ignore_monomorphic = 1;
 	opt.ignore_singleton = 1;
+	opt.thinning_interval = 1;
 
-	while ((c = getopt(argc, argv, "mso:R:i:")) != -1) {
+	while ((c = getopt(argc, argv, "i:mo:R:st:")) != -1) {
 		switch (c) {
-			case 'R':
-				opt.regions_fn = optarg;
-				break;
 			case 'i':
 				opt.new_ind_fn = optarg;
-				break;
-			case 'o':
-				opt.oprefix = optarg;
 				break;
 			case 'm':
 				opt.ignore_monomorphic = 0;
 				break;
+			case 'o':
+				opt.oprefix = optarg;
+				break;
+			case 'R':
+				opt.regions_fn = optarg;
+				break;
 			case 's':
 				opt.ignore_singleton = 0;
+				break;
+			case 't':
+				opt.thinning_interval = parse_bp(optarg);
+				if (opt.thinning_interval < 0 || opt.thinning_interval > 100*1000*1000) {
+					fprintf(stderr, "Thinning interval `%s' is out of range\n", optarg);
+					usage(argv[0]);
+				}
 				break;
 			default:
 				usage(argv[0]);

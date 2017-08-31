@@ -64,7 +64,13 @@ parse_ind(char *fn, indlist_t **indlist, int *n)
 	}
 
 	while (getline(&buf, &buflen, fp) != -1) {
-		char *c = buf;
+		char *c, *c0 = buf;
+
+		/* skip leading spaces created by EIGENSOFT */
+		while (*c0 == ' ' || *c0 == '\t')
+			c0++;
+
+		c = c0;
 		while (*c != ' ' && *c != '\t' && *c != '\n' && *c != '\r')
 			c++;
 		*c = '\0';
@@ -75,7 +81,7 @@ parse_ind(char *fn, indlist_t **indlist, int *n)
 			ret = -2;
 			goto err1;
 		}
-		ind->s = strdup(buf);
+		ind->s = strdup(c0);
 		ind->next = NULL;
 		if (head == NULL)
 			head = cur = ind;
