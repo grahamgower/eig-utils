@@ -309,6 +309,10 @@ parse_eig(opt_t *opt)
 		while (gbuf[n_gts-1] == '\n' || gbuf[n_gts-1] == '\r')
 			n_gts--;
 
+		// skip leading spaces
+		while(*c == ' ' || *c == '\t')
+			c++;
+
 		// columns are: snpid chrom gpos pos ref alt
 		next(c);
 		chrom = atoi(c);
@@ -333,25 +337,27 @@ parse_eig(opt_t *opt)
 		if (opt->new_ind_fn)
 			n_gts = n_new;
 
-		if (opt->ignore_monomorphic || opt->ignore_singleton) {
-			// check for invariant or singletons sites
-			int ref_i = 0, alt_i = 0;
-			for (i=0; i<n_gts; i++) {
-				int j = opt->new_ind_fn ? ind_map[i] : i;
-				switch (gbuf[j]) {
-					case '2':
-						ref_i++;
-						break;
-					case '0':
-						alt_i++;
-						break;
-				}
+		/*
+		 * check for missing rows, invariant, or singletons sites
+		 */
+		int ref_i = 0, alt_i = 0;
+		for (i=0; i<n_gts; i++) {
+			int j = opt->new_ind_fn ? ind_map[i] : i;
+			switch (gbuf[j]) {
+				case '2':
+					ref_i++;
+					break;
+				case '0':
+					alt_i++;
+					break;
 			}
-			if (opt->ignore_monomorphic && (alt_i == 0 || ref_i == 0))
-				continue;
-			if (opt->ignore_singleton && (alt_i == 1 || ref_i == 1))
-				continue;
 		}
+		if (alt_i+ref_i == 0)
+			continue;
+		if (opt->ignore_monomorphic && (alt_i == 0 || ref_i == 0))
+			continue;
+		if (opt->ignore_singleton && (alt_i == 1 || ref_i == 1))
+			continue;
 
 		if (opt->regions_fn) {
 			interval_t *l = NULL, *u = NULL;
