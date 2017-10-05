@@ -1,5 +1,5 @@
 HTSPROGS=vcf2eig
-BASEPROGS=eig2phylip eigreduce distance
+BASEPROGS=eig2multifasta eig2phylip eigreduce distance
 PROGS=$(BASEPROGS) $(HTSPROGS) abba-baba
 ZLIB=/opt/shared/zlib/1.2.8-gnu_4.8.0/lib
 HTSDIR=../../../htslib
