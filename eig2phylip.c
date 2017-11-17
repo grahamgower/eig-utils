@@ -183,10 +183,13 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn, char *oprefix)
 			goto err4;
 		}
 
+		if (sbuf[snbytes-1] == '\n')
+			sbuf[snbytes-1] = '\0';
+
 // skip to next column
 #define next(x) \
-		while (*x != ' ' && *x != '\t') x++; \
-		while (*x == ' ' || *x == '\t') x++;
+		while (*x != '\0' && *x != ' ' && *x != '\t') x++; \
+		while (*x != '\0' && (*x == ' ' || *x == '\t')) x++;
 
 		// columns are: snpid chrom gpos pos ref alt
 		next(c);
@@ -198,8 +201,8 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn, char *oprefix)
 		next(c);
 		alt = *c;
 
-		if (ref == '\n' || ref == '\r' || alt == '\n' || alt == '\r') {
-			fprintf(stderr, "%s: line %jd: missing ref/alt field(s)\n",
+		if (ref == '\0' || alt == '\0') {
+			fprintf(stderr, "%s: line %jd: missing ref/alt field(s) in columns 5 and 6\n",
 					snp_fn, (intmax_t)n_sites+1);
 			ret = -7;
 			goto err4;
