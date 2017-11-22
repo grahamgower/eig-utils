@@ -186,6 +186,10 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn, char *oprefix)
 		if (sbuf[snbytes-1] == '\n')
 			sbuf[snbytes-1] = '\0';
 
+		/* skip leading spaces created by EIGENSOFT */
+		while (*c == ' ')
+			c++;
+
 // skip to next column
 #define next(x) \
 		while (*x != '\0' && *x != ' ' && *x != '\t') x++; \
@@ -207,6 +211,12 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn, char *oprefix)
 			ret = -7;
 			goto err4;
 		}
+
+		// Eigensoft uses X in the .snp file instead of N.
+		if (ref == 'X')
+			ref = 'N';
+		if (alt == 'X')
+			alt = 'N';
 
 		// check for monomorphic (invariant) sites
 		int ref_i = 0, alt_i = 0;
