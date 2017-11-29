@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Graham Gower <graham.gower@gmail.com>
+ * Copyright (c) 2016,2017 Graham Gower <graham.gower@gmail.com>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -19,6 +19,46 @@
 #include <getopt.h>
 #include <errno.h>
 #include <stdint.h>
+
+// ambiguity codes
+static char iupac[] = {
+	['A'<<8|'A']='A',
+	['A'<<8|'C']='M',
+	['A'<<8|'G']='R',
+	['A'<<8|'T']='W',
+	['C'<<8|'A']='M',
+	['C'<<8|'C']='C',
+	['C'<<8|'G']='S',
+	['C'<<8|'T']='Y',
+	['G'<<8|'A']='R',
+	['G'<<8|'C']='S',
+	['G'<<8|'G']='G',
+	['G'<<8|'T']='K',
+	['T'<<8|'A']='W',
+	['T'<<8|'C']='Y',
+	['T'<<8|'G']='K',
+	['T'<<8|'T']='T',
+
+	['N'<<8|'A']='N',
+	['N'<<8|'C']='N',
+	['N'<<8|'G']='N',
+	['N'<<8|'T']='N',
+	['A'<<8|'N']='N',
+	['C'<<8|'N']='N',
+	['G'<<8|'N']='N',
+	['T'<<8|'N']='N',
+	['N'<<8|'N']='N',
+};
+
+typedef struct {
+	char *ind_fn;
+	char *geno_fn;
+	char *snp_fn;
+	char *oprefix;
+
+	int ignore_monomorphic;
+	int output_numbers;
+} opt_t;
 
 typedef struct ind {
 	char *s; // name
@@ -107,7 +147,7 @@ err0:
 }
 
 int
-parse_eig(char *ind_fn, char *geno_fn, char *snp_fn, char *oprefix)
+parse_eig(opt_t *opt) //, char *ind_fn, char *geno_fn, char *snp_fn, char *oprefix)
 {
 	int i;
 	int ret;
@@ -121,21 +161,21 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn, char *oprefix)
 	int64_t n_sites;
 	int64_t invariant[256] = {0,};
 
-	if (parse_ind(ind_fn, &indlist, &n_indivs) < 0) {
+	if (parse_ind(opt->ind_fn, &indlist, &n_indivs) < 0) {
 		ret = -1;
 		goto err0;
 	}
 
-	geno_fp = fopen(geno_fn, "r");
+	geno_fp = fopen(opt->geno_fn, "r");
 	if (geno_fp == NULL) {
-		fprintf(stderr, "fopen: %s: %s\n", geno_fn, strerror(errno));
+		fprintf(stderr, "fopen: %s: %s\n", opt->geno_fn, strerror(errno));
 		ret = -2;
 		goto err1;
 	}
 
-	snp_fp = fopen(snp_fn, "r");
+	snp_fp = fopen(opt->snp_fn, "r");
 	if (snp_fp == NULL) {
-		fprintf(stderr, "fopen: %s: %s\n", snp_fn, strerror(errno));
+		fprintf(stderr, "fopen: %s: %s\n", opt->snp_fn, strerror(errno));
 		ret = -3;
 		goto err2;
 	}
@@ -149,10 +189,10 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn, char *oprefix)
 
 	for (i=0, curind=indlist; curind!=NULL; i++, curind=curind->next) {
 		char tmpfn[4096];
-		snprintf(tmpfn, 4096, "%s.%s", oprefix, curind->s);
+		snprintf(tmpfn, 4096, "%s.%s", opt->oprefix, curind->s);
 		indfplist[i] = fopen(tmpfn, "w");
 		if (indfplist[i] == NULL) {
-			fprintf(stderr, "fopen: %s: %s\n", snp_fn, strerror(errno));
+			fprintf(stderr, "fopen: %s: %s\n", opt->snp_fn, strerror(errno));
 			ret = -5;
 			goto err4;
 		}
@@ -178,7 +218,7 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn, char *oprefix)
 
 		if (n_gts != n_indivs) {
 			fprintf(stderr, "%s has %d individuals, but %s: line %jd supplies %d genotypes\n",
-					ind_fn, n_indivs, geno_fn, (intmax_t)n_sites+1, n_gts);
+					opt->ind_fn, n_indivs, opt->geno_fn, (intmax_t)n_sites+1, n_gts);
 			ret = -6;
 			goto err4;
 		}
@@ -207,47 +247,78 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn, char *oprefix)
 
 		if (ref == '\0' || alt == '\0') {
 			fprintf(stderr, "%s: line %jd: missing ref/alt field(s) in columns 5 and 6\n",
-					snp_fn, (intmax_t)n_sites+1);
+					opt->snp_fn, (intmax_t)n_sites+1);
 			ret = -7;
 			goto err4;
 		}
 
+		if (ref != 'A' && ref != 'C' && ref != 'G' && ref != 'T' && ref != 'N') {
+			fprintf(stderr, "%s: line %jd: do not understand ref allele '%c'\n", opt->snp_fn, (intmax_t)n_sites+1, ref);
+			ret = -8;
+			goto err4;
+		}
 		// Eigensoft uses X in the .snp file instead of N.
-		if (ref == 'X')
-			ref = 'N';
 		if (alt == 'X')
 			alt = 'N';
+		else if (alt != 'A' && alt != 'C' && alt != 'G' && alt != 'T' && alt != 'N') {
+			fprintf(stderr, "%s: line %jd: do not understand alt allele '%c'\n", opt->snp_fn, (intmax_t)n_sites+1, ref);
+			ret = -9;
+			goto err4;
+		}
 
-		// check for monomorphic (invariant) sites
-		int ref_i = 0, alt_i = 0;
-		for (i=0; i<n_indivs; i++) {
-			switch (gbuf[i]) {
-				case '2':
-					ref_i++;
-					break;
-				case '0':
-					alt_i++;
-					break;
+		if (opt->ignore_monomorphic) {
+			// check for monomorphic (invariant) sites
+			int ref_i = 0, alt_i = 0;
+			for (i=0; i<n_indivs; i++) {
+				switch (gbuf[i]) {
+					case '2':
+						ref_i+=2;
+						break;
+					case '1':
+						ref_i++;
+						alt_i++;
+						break;
+					case '0':
+						alt_i++;
+						break;
+				}
+			}
+			if (alt_i == 0) {
+				invariant[(int)ref]++;
+				continue;
+			} else if (ref_i == 0) {
+				invariant[(int)alt]++;
+				continue;
 			}
 		}
-		if (alt_i == 0) {
-			invariant[(int)ref]++;
-			continue;
-		} else if (ref_i == 0) {
-			invariant[(int)alt]++;
-			continue;
-		}
 
-		for (i=0; i<n_indivs; i++) {
-			switch (gbuf[i]) {
-				case '2':
-					fputc(ref, indfplist[i]);
-					break;
-				case '0':
-					fputc(alt, indfplist[i]);
-					break;
-				default:
-					fputc('N', indfplist[i]);
+		if (opt->output_numbers) {
+			for (i=0; i<n_indivs; i++) {
+				switch (gbuf[i]) {
+					case '2':
+					case '1':
+					case '0':
+						fputc(gbuf[i], indfplist[i]);
+						break;
+					default:
+						fputc('?', indfplist[i]);
+				}
+			}
+		} else {
+			for (i=0; i<n_indivs; i++) {
+				switch (gbuf[i]) {
+					case '2':
+						fputc(ref, indfplist[i]);
+						break;
+					case '1':
+						fputc(iupac[ref<<8|alt], indfplist[i]);
+						break;
+					case '0':
+						fputc(alt, indfplist[i]);
+						break;
+					default:
+						fputc('N', indfplist[i]);
+				}
 			}
 		}
 
@@ -256,15 +327,15 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn, char *oprefix)
 
 	if (errno) {
 		fprintf(stderr, "getline: %s: %s\n",
-				gnbytes==-1 ? geno_fn : snp_fn,
+				gnbytes==-1 ? opt->geno_fn : opt->snp_fn,
 				strerror(errno));
-		ret = -8;
+		ret = -10;
 		goto err4;
 	} else if (gnbytes != -1 || snbytes != -1) {
 		fprintf(stderr, "%s has more entries than %s -- truncated file?\n",
-				gnbytes!=-1 ? geno_fn : snp_fn,
-				gnbytes!=-1 ? snp_fn : geno_fn);
-		ret = -9;
+				gnbytes!=-1 ? opt->geno_fn : opt->snp_fn,
+				gnbytes!=-1 ? opt->snp_fn : opt->geno_fn);
+		ret = -11;
 		goto err4;
 	}
 
@@ -276,30 +347,32 @@ parse_eig(char *ind_fn, char *geno_fn, char *snp_fn, char *oprefix)
 	char tmpfn[4096];
 
 	// Phylip header
-	snprintf(tmpfn, 4096, "%s.HEADER.txt", oprefix);
+	snprintf(tmpfn, 4096, "%s.HEADER.txt", opt->oprefix);
 	tmpfp = fopen(tmpfn, "w");
 	if (tmpfp == NULL) {
 		fprintf(stderr, "fopen: %s: %s\n", tmpfn, strerror(errno));
-		ret = -10;
+		ret = -12;
 		goto err4;
 	}
 	fprintf(tmpfp, " %d %jd\n", n_indivs, (intmax_t)n_sites);
 	fclose(tmpfp);
 
-	// Invariant sites, for RAxML option --asc-corr=stamatakis
-	snprintf(tmpfn, 4096, "%s.invariant.txt", oprefix);
-	tmpfp = fopen(tmpfn, "w");
-	if (tmpfp == NULL) {
-		fprintf(stderr, "fopen: %s: %s\n", tmpfn, strerror(errno));
-		ret = -11;
-		goto err4;
+	if (opt->ignore_monomorphic) {
+		// Invariant sites, for RAxML option --asc-corr=stamatakis
+		snprintf(tmpfn, 4096, "%s.invariant.txt", opt->oprefix);
+		tmpfp = fopen(tmpfn, "w");
+		if (tmpfp == NULL) {
+			fprintf(stderr, "fopen: %s: %s\n", tmpfn, strerror(errno));
+			ret = -13;
+			goto err4;
+		}
+		fprintf(tmpfp, "%jd %jd %jd %jd\n",
+				(intmax_t)invariant['A'],
+				(intmax_t)invariant['C'],
+				(intmax_t)invariant['G'],
+				(intmax_t)invariant['T']);
+		fclose(tmpfp);
 	}
-	fprintf(tmpfp, "%jd %jd %jd %jd\n",
-			(intmax_t)invariant['A'],
-			(intmax_t)invariant['C'],
-			(intmax_t)invariant['G'],
-			(intmax_t)invariant['T']);
-	fclose(tmpfp);
 
 
 	ret = 0;
@@ -327,6 +400,9 @@ void
 usage(char *argv0)
 {
 	fprintf(stderr, "usage: %s -o OUTPREFIX f.ind f.geno f.snp\n", argv0);
+	fprintf(stderr, "   -n               Output numbers (0,1,2,?) instead of IUPAC codes [no]\n");
+	fprintf(stderr, "   -m               Output monomorphic sites [no]\n");
+	fprintf(stderr, "   -o STR           Output file prefix [phylip.out]\n");
 	exit(1);
 }
 
@@ -334,12 +410,22 @@ int
 main(int argc, char **argv)
 {
 	int c;
-	char *oprefix = "phylip.out";
+	opt_t opt;
 
-	while ((c = getopt(argc, argv, "o:")) != -1) {
+	memset(&opt, 0, sizeof(opt));
+	opt.oprefix = "phylip.out";
+	opt.ignore_monomorphic = 1;
+
+	while ((c = getopt(argc, argv, "mno:")) != -1) {
 		switch (c) {
+			case 'm':
+				opt.ignore_monomorphic = 0;
+				break;
+			case 'n':
+				opt.output_numbers = 1;
+				break;
 			case 'o':
-				oprefix = optarg;
+				opt.oprefix = optarg;
 				break;
 			default:
 				usage(argv[0]);
@@ -349,6 +435,10 @@ main(int argc, char **argv)
 	if (argc-optind != 3)
 		usage(argv[0]);
 
-	return parse_eig(argv[optind], argv[optind+1], argv[optind+2], oprefix);
+	opt.ind_fn = argv[optind];
+	opt.geno_fn = argv[optind+1];
+	opt.snp_fn = argv[optind+2];
+
+	return parse_eig(&opt);
 }
 
