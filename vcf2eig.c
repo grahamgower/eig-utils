@@ -279,7 +279,7 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 				continue;
 			}
 
-			if (!bcf_is_snp(rec))
+			if (!bcf_is_snp(rec) || bcf_get_info(hdr, rec, "INDEL"))
 				break;
 
 			if (opt->filter_str && bcf_has_filter(hdr, rec, opt->filter_str) > 0)
