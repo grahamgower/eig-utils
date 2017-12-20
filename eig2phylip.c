@@ -159,6 +159,7 @@ parse_eig(opt_t *opt) //, char *ind_fn, char *geno_fn, char *snp_fn, char *opref
 	indlist_t *indlist, *curind;
 	int n_indivs;
 	int64_t n_sites;
+	int64_t lineno;
 	int64_t invariant[256] = {0,};
 
 	if (parse_ind(opt->ind_fn, &indlist, &n_indivs) < 0) {
@@ -200,6 +201,7 @@ parse_eig(opt_t *opt) //, char *ind_fn, char *geno_fn, char *snp_fn, char *opref
 	}
 
 	n_sites = 0;
+	lineno = 0;
 	gbuf = sbuf = NULL;
 	gbuflen = sbuflen = 0;
 
@@ -208,6 +210,8 @@ parse_eig(opt_t *opt) //, char *ind_fn, char *geno_fn, char *snp_fn, char *opref
 		snbytes = getline(&sbuf, &sbuflen, snp_fp);
 		if (gnbytes == -1 || snbytes == -1)
 			break;
+
+		lineno++;
 
 		char ref;
 		char alt;
@@ -218,7 +222,7 @@ parse_eig(opt_t *opt) //, char *ind_fn, char *geno_fn, char *snp_fn, char *opref
 
 		if (n_gts != n_indivs) {
 			fprintf(stderr, "%s has %d individuals, but %s: line %jd supplies %d genotypes\n",
-					opt->ind_fn, n_indivs, opt->geno_fn, (intmax_t)n_sites+1, n_gts);
+					opt->ind_fn, n_indivs, opt->geno_fn, (intmax_t)lineno, n_gts);
 			ret = -6;
 			goto err4;
 		}
@@ -247,13 +251,13 @@ parse_eig(opt_t *opt) //, char *ind_fn, char *geno_fn, char *snp_fn, char *opref
 
 		if (ref == '\0' || alt == '\0') {
 			fprintf(stderr, "%s: line %jd: missing ref/alt field(s) in columns 5 and 6\n",
-					opt->snp_fn, (intmax_t)n_sites+1);
+					opt->snp_fn, (intmax_t)lineno);
 			ret = -7;
 			goto err4;
 		}
 
 		if (ref != 'A' && ref != 'C' && ref != 'G' && ref != 'T' && ref != 'N') {
-			fprintf(stderr, "%s: line %jd: do not understand ref allele '%c'\n", opt->snp_fn, (intmax_t)n_sites+1, ref);
+			fprintf(stderr, "%s: line %jd: do not understand ref allele '%c'\n", opt->snp_fn, (intmax_t)lineno, ref);
 			ret = -8;
 			goto err4;
 		}
@@ -261,7 +265,7 @@ parse_eig(opt_t *opt) //, char *ind_fn, char *geno_fn, char *snp_fn, char *opref
 		if (alt == 'X')
 			alt = 'N';
 		else if (alt != 'A' && alt != 'C' && alt != 'G' && alt != 'T' && alt != 'N') {
-			fprintf(stderr, "%s: line %jd: do not understand alt allele '%c'\n", opt->snp_fn, (intmax_t)n_sites+1, ref);
+			fprintf(stderr, "%s: line %jd: do not understand alt allele '%c'\n", opt->snp_fn, (intmax_t)lineno, ref);
 			ret = -9;
 			goto err4;
 		}
