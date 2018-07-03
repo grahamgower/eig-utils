@@ -443,6 +443,10 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 			goto err7;
 		}
 
+		/* skip leading spaces created by EIGENSOFT */
+		while (*c == ' ')
+			c++;
+
 		// columns are: snpid chrom gpos pos ref alt
 		next(c);
 		chrom = atoi(c);

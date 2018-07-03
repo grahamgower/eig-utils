@@ -200,6 +200,10 @@ parse_eig(opt_t *opt, char *ind_fn, char *geno_fn, char *snp_fn)
 			goto err4;
 		}
 
+		/* skip leading spaces created by EIGENSOFT */
+		while (*c == ' ')
+			c++;
+
 // skip to next column
 #define next(x) \
 		while (*x != ' ' && *x != '\t') x++; \
