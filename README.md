@@ -15,7 +15,8 @@ abba-baba - D stats reimplementation
 `vcf2eig` uses **htslib** to parse vcf/bcf files.
 
 # Installation
-Clone the git repository, then build with `make`.
+Clone the git repository, then build with `make`.  Some minor changes to the
+Makefile may be requred, e.g. to specify the path to htslib.
 
 # vcf2eig
 `vcf2eig` calls pseudohaploid genotypes from the read pileup.  This program
@@ -44,7 +45,7 @@ for b in s1.bcf.gz s2.bcf.gz s3.bcf.gz; do
   bcftools index $out
 ```
 
-3. Convert to eigenstrat format, ignoring sites with the SnpGap filter
+3. Convert to EIGENSTRAT format, ignoring sites with the SnpGap filter
    (-F SnpGap), doing majority allele pseudohaploidisation (-j),
    outputting monomorphic/invariant (-m) and singleton (-s) sites.
    This can be slow, so splitting by chromosome (-r) and working in parallel is
@@ -63,7 +64,52 @@ done | parallel -j 8
 ```
 for c in $(seq $nchrom); do cat eigdata.chr$c.snp; done > all_chr.snp
 for c in $(seq $nchrom); do cat eigdata.chr$c.geno; done > all_chr.geno
+ln eigdata.chr1.ind all_chr.ind
 ```
+
+# eig2phylip
+
+`eig2phylip` was written to provide input for
+[RAxML](https://sco.h-its.org/exelixis/web/software/raxml/index.html).
+The EIGENSTRAT snp/geno files have one locus per line with columns
+corresponding to individuals; in contrast, the phylip format is
+transposed, with one inidividual per line and each column corresponding
+to one locus.
+`eig2phylip` takes the most memory efficient approach to conversion, and
+outputs one file per individual, writing genotypes as the input files
+are parsed.  The result is that the output files need to be catenated
+once `eig2phylip` completes.
+
+```
+tmppfx=temp.phylip
+eig2phylip -o $tmppfx all_chr.ind all_chr.geno all_chr.snp
+
+# catenate output into single file
+(   cat ${tmppfx}.HEADER.txt
+    for f in ${tmppfx}.*; do
+       case "$f" in
+         "${tmppfx}.HEADER.txt") continue ;;
+         "${tmppfx}.invariant.txt") continue ;;
+       esac
+      cat $f
+   done
+) > all_chr.phy
+
+rm ${tmppfx}.*
+```
+
+Addionally, `eig2phylip` outputs a file `${tmppfx}.invariant.txt`, which
+contains counts of monomorphic/invariant sites for each of the four
+nucleotides.  This can be used with the RAxML option `--asc-corr=stamatakis`
+in conjuction with RAxML's `ASC_GTRGAMMA` model.  Note that the input
+data to `eig2phylip` must contain monomorphic sites (use `vcf2eig`'s -m flag)
+for the counts to be obtained.  It is also important to maintain singleton
+sites (`vcf2eig`'s -s flag) for terminal branch lengths in RAxML's output to
+have meaning.  This is in contrast to use with EIGENSOFT and ADMIXTOOLS,
+where monomorphic and singleton sites contribute nothing, but dramatically
+increases file sizes.  `eigreduce` can be used to remove monomorphic and
+singleton sites from existing EIGENSTRAT files, which will reduce memory
+consumption and run times when using EIGENSOFT and ADMIXTOOLS.
 
 # Further info
 More information about usage and options can be obtained from the utilities
