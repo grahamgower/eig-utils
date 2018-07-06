@@ -95,10 +95,11 @@ eig2phylip -o $tmppfx all_chr.ind all_chr.geno all_chr.snp
    done
 ) > all_chr.phy
 
+mv ${tmppfx}.invariant.txt all_chr.invariant.txt
 rm ${tmppfx}.*
 ```
 
-Addionally, `eig2phylip` outputs a file `${tmppfx}.invariant.txt`, which
+Addionally, `eig2phylip` outputs a file `*.invariant.txt`, which
 contains counts of monomorphic/invariant sites for each of the four
 nucleotides.  This can be used with the RAxML option `--asc-corr=stamatakis`
 in conjuction with RAxML's `ASC_GTRGAMMA` model.  Note that the input
