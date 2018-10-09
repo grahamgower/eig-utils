@@ -39,6 +39,7 @@ KBTREE_INIT(bed, interval_t, left_cmp);
 typedef struct {
 	int ignore_monomorphic;
 	int ignore_singleton;
+	int ignore_missing;
 	int thinning_interval;
 	char *geno_fn;
 	char *snp_fn;
@@ -358,6 +359,8 @@ parse_eig(opt_t *opt)
 			continue;
 		if (opt->ignore_singleton && (alt_i == 1 || ref_i == 1))
 			continue;
+		if (opt->ignore_missing && alt_i+ref_i != n_gts)
+			continue;
 
 		if (opt->regions_fn) {
 			interval_t *l = NULL, *u = NULL;
@@ -454,6 +457,7 @@ usage(char *argv0)
 	fprintf(stderr, "usage: %s [...] file.geno file.snp [file.ind]\n", argv0);
 	fprintf(stderr, "   -m               Output monomorphic sites [no]\n");
 	fprintf(stderr, "   -s               Output singleton sites [no]\n");
+	fprintf(stderr, "   -x               Don't output sites with missing data [no]\n");
 	fprintf(stderr, "   -i NEW.IND       Output only individuals (and reorder) from NEW.IND []\n");
 	fprintf(stderr, "   -R BED           Output only the regions specified in the bed file []\n"
 			"                        (intervals must be non-overlapping)\n");
@@ -471,9 +475,10 @@ main(int argc, char **argv)
 	opt.oprefix = "eigreduce.out";
 	opt.ignore_monomorphic = 1;
 	opt.ignore_singleton = 1;
+	opt.ignore_missing = 0;
 	opt.thinning_interval = 1;
 
-	while ((c = getopt(argc, argv, "i:mo:R:st:")) != -1) {
+	while ((c = getopt(argc, argv, "i:mo:R:st:x")) != -1) {
 		switch (c) {
 			case 'i':
 				opt.new_ind_fn = optarg;
@@ -496,6 +501,9 @@ main(int argc, char **argv)
 					fprintf(stderr, "Thinning interval `%s' is out of range\n", optarg);
 					usage(argv[0]);
 				}
+				break;
+			case 'x':
+				opt.ignore_missing = 1;
 				break;
 			default:
 				usage(argv[0]);
