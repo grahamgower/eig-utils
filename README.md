@@ -43,6 +43,7 @@ for b in s1.bcf.gz s2.bcf.gz s3.bcf.gz; do
   out=SnpGap.$b
   bcftools filter --SnpGap 3 -O b -o $out $b
   bcftools index $out
+done
 ```
 
 3. Convert to EIGENSTRAT format, ignoring sites with the SnpGap filter
@@ -60,7 +61,7 @@ done | parallel -j 8
 
 4. Merge output files from individual chromosomes.
    The *.snp and *.geno files contain a single line for each locus,
-   and can simply be catenated.
+   and can simply be concatenated.
 ```
 for c in $(seq $nchrom); do cat eigdata.chr$c.snp; done > all_chr.snp
 for c in $(seq $nchrom); do cat eigdata.chr$c.geno; done > all_chr.geno
@@ -77,14 +78,14 @@ transposed, with one inidividual per line and each column corresponding
 to one locus.
 `eig2phylip` takes the most memory efficient approach to conversion, and
 outputs one file per individual, writing genotypes as the input files
-are parsed.  The result is that the output files need to be catenated
+are parsed.  The result is that the output files need to be concatenated
 once `eig2phylip` completes.
 
 ```
 tmppfx=temp.phylip
 eig2phylip -o $tmppfx all_chr.ind all_chr.geno all_chr.snp
 
-# catenate output into single file
+# concatenate output into single file
 (   cat ${tmppfx}.HEADER.txt
     for f in ${tmppfx}.*; do
        case "$f" in
@@ -135,6 +136,7 @@ usage: ./vcf2eig [...] file1.vcf [... fileN.vcf]
    -o STR           Output file prefix [out]
    -j               Use majority allele for genotype call [no]
    -d FILE          Max depth for samples (file format: Sample  MaxDepth) []
+   -l               Ignore limit of 87 autosomes [no]
 ```
 
 ```

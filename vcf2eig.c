@@ -32,6 +32,7 @@ typedef struct {
 	int ignore_monomorphic;
 	int ignore_singleton;
 	int ignore_uninformative;
+	int ignore_autosome_limit;
 	int haploidise_majority_allele;
 	int num_autosomes;
 	int filter_pass;
@@ -71,11 +72,13 @@ again:
 	}
 
 	int d = atoi(c);
-	if (d < 1 || d > 87) {
-		fprintf(stderr, "Unsupported chromosome name ``%s''.\n"
-				"Eigensoft/AdmixTools have a hardcoded limit of 89 chromosome numbers,\n"
+	if (d < 1 || (!opt->ignore_autosome_limit && d > 87)) {
+		fprintf(stderr, "Unsupported chromosome name ``%s''.\n", chr);
+		if (!opt->ignore_autosome_limit) {
+				fprintf(stderr, "Eigensoft/AdmixTools have a hardcoded limit of 89 chromosome numbers,\n"
 				"of which two are reserved for sex chromosomes.  If you're using contigs\n"
-				"or scaffolds, try renaming the 87 biggest to numbers.\n", chr);
+				"or scaffolds, try renaming the 87 biggest to numbers.\n");
+        }
 		return -1;
 	}
 
@@ -290,7 +293,7 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 			if (bcf_get_format_int32(hdr, rec, "DPR", &dpr_arr, &ndpr_arr) < 1) {
 				// DPR is deprecated, try AD
 				if (bcf_get_format_int32(hdr, rec, "AD", &dpr_arr, &ndpr_arr) < 1) {
-					fprintf(stderr, "Error: %s: no FORMAT/DPR nor FORMAT/AD field at %s:%d.\n",
+					fprintf(stderr, "Error: %s: no FORMAT/DPR nor FORMAT/AD field at %s:%ld.\n",
 						vcflist[i], bcf_seqname(hdr, rec), rec->pos+1);
 					ret = -11;
 					goto err6;
@@ -464,6 +467,7 @@ usage(char *argv0)
 	fprintf(stderr, "   -o STR           Output file prefix [out]\n");
 	fprintf(stderr, "   -j               Use majority allele for genotype call [no]\n");
 	fprintf(stderr, "   -d FILE          Max depth for samples (file format: Sample\tMaxDepth) []\n");
+	fprintf(stderr, "   -l               Ignore limit of 87 autosomes [no]\n");
 	exit(1);
 }
 
@@ -482,11 +486,12 @@ main(int argc, char **argv)
 	opt.ignore_monomorphic = 1;
 	opt.ignore_singleton = 1;
 	opt.ignore_uninformative = 1;
+	opt.ignore_autosome_limit = 0;
 	opt.haploidise_majority_allele = 0;
 	opt.num_autosomes = 29;
 	opt.oprefix = "out";
 
-	while ((c = getopt(argc, argv, "a:d:r:R:o:F:tmsufj")) != -1) {
+	while ((c = getopt(argc, argv, "a:d:r:R:o:F:tmsufjl")) != -1) {
 		switch (c) {
 			case 't':
 				opt.ignore_transitions = 1;
@@ -500,6 +505,9 @@ main(int argc, char **argv)
 			case 'u':
 				opt.ignore_uninformative = 0;
 				break;
+			case 'l':
+				opt.ignore_autosome_limit = 1;
+				break;
 			case 'R':
 				opt.regions_fn = optarg;
 				break;
@@ -511,10 +519,6 @@ main(int argc, char **argv)
 				break;
 			case 'a':
 				opt.num_autosomes = strtoul(optarg, NULL, 0);
-				if (opt.num_autosomes < 1 || opt.num_autosomes > 87) {
-					fprintf(stderr, "num_autosomes=`%s' out of range\n", optarg);
-					return -1;
-				}
 				break;
 			case 'f':
 				opt.filter_pass = 1;
@@ -540,6 +544,11 @@ main(int argc, char **argv)
 	if (opt.regions && opt.regions_fn) {
 		fprintf(stderr, "-R and -r are mutually exclusive.");
 		usage(argv[0]);
+	}
+
+	if (!opt.ignore_autosome_limit && (opt.num_autosomes < 1 || opt.num_autosomes > 87)) {
+		fprintf(stderr, "num_autosomes=`%s' out of range\n", optarg);
+		return -1;
 	}
 
 	if (vcf2eig(&opt, argv+optind, argc-optind) < 0)
