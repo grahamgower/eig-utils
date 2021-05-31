@@ -78,11 +78,46 @@ again:
 				fprintf(stderr, "Eigensoft/AdmixTools have a hardcoded limit of 89 chromosome numbers,\n"
 				"of which two are reserved for sex chromosomes.  If you're using contigs\n"
 				"or scaffolds, try renaming the 87 biggest to numbers.\n");
-        }
+		}
 		return -1;
 	}
 
 	return d;
+}
+
+/* Admixtools requires names to be at most 39 chars. Warn if this will truncate
+ * a name or if the names will become non unique. Returns -1 if names will be
+ * non unique.
+ */
+int
+check_name_truncation(bcf_srs_t *sr)
+{
+	bcf_hdr_t *hdr;
+	int i, j, k;
+	int ret = 0;
+	const char *sample, *other;
+
+	for (i=0; i<sr->nreaders; i++) {
+		hdr = bcf_sr_get_header(sr, i);
+		for (j=0; j<bcf_hdr_nsamples(hdr); j++) {
+			sample = bcf_hdr_int2id(hdr, BCF_DT_SAMPLE, j);
+			if (strlen(sample) > 39)
+				fprintf(stderr, "Sample name '%s' truncated to 39 chars.\n", sample);
+			else {
+				for (k=j+1; k<bcf_hdr_nsamples(hdr); k++) {
+					other = bcf_hdr_int2id(hdr, BCF_DT_SAMPLE, k);
+					if (!strncmp(sample, other, 39)) {
+						fprintf(stderr,
+						"Samples '%s' and '%s' are the same after truncation\n",
+						sample, other);
+						ret = -1;
+					}
+				}
+			}
+		}
+	}
+
+	return ret;
 }
 
 int
@@ -95,7 +130,6 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 	int i, j;
 	int nr;
 	int nsamples = 0;
-       
 	int *gt; // genotypes (number of REF alleles for each sample)
 	int ndpr_arr = 0;
 	int32_t *dpr_arr = NULL; // DPR or AD array
@@ -155,11 +189,16 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 		goto err3;
 	}
 
+	if (check_name_truncation(sr) < 0) {
+		ret = -7;
+		goto err4;
+	}
+
 	sprintf(buf, "%s.ind", opt->oprefix);
 	ind_fp = fopen(buf, "w");
 	if (ind_fp == NULL) {
 		fprintf(stderr, "%s: %s\n", buf, strerror(errno));
-		ret = -7;
+		ret = -8;
 		goto err4;
 	}
 
@@ -175,7 +214,7 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 	max_dp = calloc(nsamples, sizeof(int));
 	if (max_dp == NULL) {
 		perror("calloc");
-		ret = -8;
+		ret = -9;
 		goto err4;
 	}
 
@@ -188,7 +227,7 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 		fp = fopen(opt->depth_fn, "r");
 		if (fp == NULL) {
 			fprintf(stderr, "%s: %s\n", opt->depth_fn, strerror(errno));
-			ret = -9;
+			ret = -10;
 			goto err5;
 		}
 
@@ -205,7 +244,7 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 					fprintf(stderr, "getline: %s: %s\n",
 							opt->depth_fn, strerror(errno));
 					fclose(fp);
-					ret = -10;
+					ret = -11;
 					goto err5;
 				}
 				break;
@@ -295,7 +334,7 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 				if (bcf_get_format_int32(hdr, rec, "AD", &dpr_arr, &ndpr_arr) < 1) {
 					fprintf(stderr, "Error: %s: no FORMAT/DPR nor FORMAT/AD field at %s:%ld.\n",
 						vcflist[i], bcf_seqname(hdr, rec), rec->pos+1);
-					ret = -11;
+					ret = -12;
 					goto err6;
 				}
 			}
@@ -372,7 +411,7 @@ vcf2eig(opt_t *opt, char **vcflist, int n)
 				chr = strdup(bcf_seqname(hdr, rec));
 				chrid = chrmap(opt, bcf_seqname(hdr, rec));
 				if (chrid == -1) {
-					ret = -12;
+					ret = -13;
 					goto err6;
 				}
 				pos = rec->pos+1;
